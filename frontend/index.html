@@ -859,6 +859,10 @@
      the summary card, the results table) gets new rules below. */
 
   .mode-tabs { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; margin-bottom: 28px; }
+  .mode-tabs.tabs-compact { gap: 6px; }
+  .mode-tabs.tabs-compact .mode-tab { padding: 7px 10px; min-width: 0; font-size: 11.5px; }
+  .mode-tabs.tabs-tight { gap: 4px; }
+  .mode-tabs.tabs-tight .mode-tab { padding: 6px 7px; min-width: 0; font-size: 10px; }
   .mode-tab {
     position: relative;
     margin-top: 0;
@@ -1463,6 +1467,36 @@ window.addEventListener("resize", () => {
   fitEcosystemTabsResizeTimer = setTimeout(fitEcosystemTabs, 100);
 });
 
+const modeTabsEl = document.getElementById("mode-tabs");
+function fitModeTabs() {
+  // Same shrink-to-fit approach as fitEcosystemTabs -- three static tabs
+  // ("Tweet Validator" / "Engagement Value" / "Coming Soon") at their
+  // normal size are far wider than a phone screen, so on mobile they'd
+  // otherwise stack to three separate lines instead of sitting side by side.
+  modeTabsEl.classList.remove("tabs-compact", "tabs-tight");
+  modeTabsEl.style.flexWrap = "wrap";
+  if (window.innerWidth > 520) return;
+
+  modeTabsEl.style.flexWrap = "nowrap";
+  const fits = () => modeTabsEl.scrollWidth <= modeTabsEl.clientWidth + 1;
+  if (fits()) return;
+
+  modeTabsEl.classList.add("tabs-compact");
+  if (fits()) return;
+
+  modeTabsEl.classList.add("tabs-tight");
+  if (fits()) return;
+
+  modeTabsEl.classList.remove("tabs-compact", "tabs-tight");
+  modeTabsEl.style.flexWrap = "wrap";
+}
+
+let fitModeTabsResizeTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(fitModeTabsResizeTimer);
+  fitModeTabsResizeTimer = setTimeout(fitModeTabs, 100);
+});
+
 function renderEcosystemTabs() {
   ecosystemTabs.innerHTML = pools
     .map(p => `<button type="button" class="ecosystem-tab${p === selectedPool ? " active" : ""}" data-pool="${p}">${POOL_LABELS[p] || p}</button>`)
@@ -1857,6 +1891,7 @@ function loadStats() {
 
 loadBriefs();
 loadStats();
+fitModeTabs();
 
 // Engagement Value Calculator panel, ported from the standalone
 // ~/engagement-value-calculator project. Wrapped in its own IIFE (rather
