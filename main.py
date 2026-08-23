@@ -7,22 +7,28 @@ optimistic multi-check strategy that real Bitcast validators use.
 """
 
 import hashlib
+import html
 import json
 import logging
 import os
+import secrets
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from threading import Lock
 
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from activity_log import hash_ip, log_event, read_events
+from engagement import router as engagement_router
 from prompts import generate_brief_evaluation_prompt
 
 load_dotenv()
@@ -40,6 +46,28 @@ CHUTES_API_KEY = os.getenv("CHUTES_API_KEY")
 NUM_LLM_CHECKS = 3
 MODEL = "Qwen/Qwen3-32B"
 
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
+_admin_security = HTTPBasic()
+
+
+def require_admin(credentials: HTTPBasicCredentials = Depends(_admin_security)) -> None:
+    # ADMIN_PASSWORD unset means the panel was never configured on this
+    # deployment -- refuse rather than silently falling back to some
+    # default, which would leave it wide open.
+    if not ADMIN_PASSWORD:
+        raise HTTPException(status_code=503, detail="Admin panel is not configured.")
+    # compare_digest for both, not just the password -- constant-time
+    # comparison so response timing can't be used to guess either field.
+    valid_username = secrets.compare_digest(credentials.username, ADMIN_USERNAME)
+    valid_password = secrets.compare_digest(credentials.password, ADMIN_PASSWORD)
+    if not (valid_username and valid_password):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid credentials.",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+
 LOGGER = logging.getLogger("stitch3_validator")
 
 app = FastAPI(title="Stitch3 Validator")
@@ -49,6 +77,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(engagement_router, prefix="/api/engagement")
 
 # /evaluate and /evaluate/stream are the only endpoints that spend real money
 # (each check is a Chutes API call against our own key) -- /briefs and the
@@ -416,6 +445,274 @@ def get_stats():
     return _load_stats_public()
 
 
+def _fmt_ts(ts: float) -> str:
+    return time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(ts))
+
+
+def _admin_badge(ok: bool, ok_label: str, bad_label: str) -> str:
+    cls = "status-active" if ok else "status-completed"
+    label = ok_label if ok else bad_label
+    return f'<span class="status-badge {cls}"><span class="status-dot"></span>{html.escape(label)}</span>'
+
+
+ADMIN_POOL_LABELS = {"tao": "Bittensor", "hyperliquid": "Perp DEXs", "prediction_markets": "Prediction Markets"}
+
+
+def _admin_rank_rows(counts: list[tuple[str, int]]) -> str:
+    if not counts:
+        return '<tr class="empty-row"><td colspan="3">Nothing logged yet.</td></tr>'
+    return "".join(
+        f"<tr><td class=\"col-rank\">#{i}</td>"
+        f"<td class=\"col-mono\">{html.escape(str(label))}</td>"
+        f"<td class=\"col-count\">{count}</td></tr>"
+        for i, (label, count) in enumerate(counts, start=1)
+    )
+
+
+@app.get("/admin", response_class=HTMLResponse, dependencies=[Depends(require_admin)])
+def admin_panel():
+    """Owner-only view of raw usage: every engagement-value handle lookup
+    and every tweet check, newest first. Gated by HTTP Basic Auth
+    (require_admin) -- not linked from anywhere in the public UI. Styled to
+    match the public site's own design tokens (frontend/index.html's :root
+    block) rather than a bare utility page, since this is still a page the
+    owner will look at regularly."""
+    events = read_events(limit=500)
+    lookups = [e for e in events if e.get("type") == "engagement_lookup"]
+    checks = [e for e in events if e.get("type") == "tweet_check"]
+
+    top_handles = Counter(f"@{e['handle']}" for e in lookups if e.get("handle")).most_common(10)
+    top_campaigns = Counter(e["brief_id"] for e in checks if e.get("brief_id")).most_common(10)
+
+    ecosystem_counts = Counter(e["ecosystem_id"] for e in lookups if e.get("ecosystem_id"))
+    ecosystem_total = sum(ecosystem_counts.values())
+    ecosystem_rows = "".join(
+        f"<tr><td class=\"col-mono\">{html.escape(ADMIN_POOL_LABELS.get(eco, eco))}</td>"
+        f"<td class=\"col-count\">{count}</td>"
+        f"<td class=\"col-count\">{round(count / ecosystem_total * 100)}%</td></tr>"
+        for eco, count in ecosystem_counts.most_common()
+    ) or '<tr class="empty-row"><td colspan="3">No lookups logged yet.</td></tr>'
+
+    lookup_rows = "".join(
+        f"<tr><td class=\"col-time\">{html.escape(_fmt_ts(e.get('ts', 0)))}</td>"
+        f"<td class=\"col-mono\">@{html.escape(str(e.get('handle', '')))}</td>"
+        f"<td class=\"col-mono\">{html.escape(str(e.get('campaign_id', '')))}</td>"
+        f"<td>{html.escape(str(e.get('ecosystem_id', '')))}</td>"
+        f"<td>{_admin_badge(bool(e.get('found')), 'Found', 'Not found')}</td>"
+        f"<td class=\"col-ip\">{html.escape(str(e.get('ip_hash', ''))[:12])}</td></tr>"
+        for e in lookups
+    )
+    check_rows = "".join(
+        f"<tr><td class=\"col-time\">{html.escape(_fmt_ts(e.get('ts', 0)))}</td>"
+        f"<td class=\"col-mono\">{html.escape(str(e.get('brief_id', '')))}</td>"
+        f"<td>{_admin_badge(e.get('verdict') == 'YES', 'Pass', 'Fail')}</td>"
+        f"<td class=\"col-ip\">{html.escape(str(e.get('ip_hash', ''))[:12])}</td></tr>"
+        for e in checks
+    )
+
+    page = f"""<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stitch3 Validator — Admin</title>
+<link rel="icon" type="image/png" href="/assets/favicon-new.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://api.fontshare.com/v2/css?f[]=satoshi@700,500&display=swap" rel="stylesheet">
+<style>
+  :root {{
+    color-scheme: dark;
+    --black-0: #050507;
+    --black-1: #0a0a0c;
+    --black-2: #131317;
+    --gray-100: #f1f5f9;
+    --gray-300: #d1d5db;
+    --gray-400: #9ca3af;
+    --gray-500: #6c7280;
+    --purple: #b882ff;
+    --purple-light: #cba3ff;
+    --gradient-brand: linear-gradient(105deg, #ded2d7 0%, #b882ff 100%);
+    --green: #34d399;
+    --red: #f87171;
+    --border-card: #ffffff1a;
+    --border-input: #ffffff1f;
+    --border-accent: #b882ff59;
+    --radius-control: 8px;
+    --radius-pill: 999px;
+    --font-display: "Satoshi", "Inter", sans-serif;
+    --font-body: "Inter", -apple-system, sans-serif;
+    --font-mono: "JetBrains Mono", monospace;
+    --tracking-label: .14em;
+  }}
+  * {{ box-sizing: border-box; }}
+  html {{ overflow-x: hidden; }}
+  body {{
+    background: var(--black-0);
+    color: var(--gray-400);
+    font-family: var(--font-body);
+    line-height: 1.5;
+    margin: 0;
+    padding: 48px 20px 64px;
+    position: relative;
+    overflow-x: hidden;
+  }}
+  /* Same hero glow asset/technique as the public site's body::before, so
+     this doesn't read as a bare admin utility page bolted onto the side. */
+  body::before {{
+    content: "";
+    position: absolute;
+    top: -160px;
+    left: 50%;
+    width: max(1400px, 120vw);
+    max-width: 220vw;
+    height: 1000px;
+    transform: translateX(-50%);
+    background-image: url("/assets/hero-background.png");
+    background-size: cover;
+    background-position: center top;
+    -webkit-mask-image: linear-gradient(black 55%, transparent 98%);
+    mask-image: linear-gradient(black 55%, transparent 98%);
+    opacity: 0.8;
+    pointer-events: none;
+    z-index: 0;
+  }}
+  .page {{ max-width: 920px; margin: 0 auto; position: relative; z-index: 1; animation: glide-in 1.2s ease-out; }}
+  @keyframes glide-in {{
+    from {{ opacity: 0; transform: translateY(24px); }}
+    to {{ opacity: 1; transform: translateY(0); }}
+  }}
+  .admin-header {{ display: flex; align-items: center; gap: 14px; margin-bottom: 32px; }}
+  .admin-logo {{
+    height: 34px; width: 48px; flex-shrink: 0;
+    background-color: var(--gray-100);
+    -webkit-mask-image: url("/assets/logo-icon-only.png");
+    mask-image: url("/assets/logo-icon-only.png");
+    -webkit-mask-size: contain; mask-size: contain;
+    -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+  }}
+  .kicker {{ font-family: var(--font-display); font-weight: 700; font-size: 22px; color: var(--gray-100); letter-spacing: -0.01em; display: block; }}
+  .disclaimer {{ font-size: 12.5px; color: var(--gray-500); }}
+  .card {{
+    position: relative;
+    background: radial-gradient(ellipse 120% 100% at 50% 0%, #b882ff14 0%, transparent 60%), var(--black-1);
+    border: 1px solid var(--border-accent);
+    border-radius: 14px;
+    padding: 24px;
+    box-shadow: 0 8px 48px #0009, 0 0 64px #b882ff14;
+    margin-bottom: 24px;
+  }}
+  .card h2 {{
+    margin: 0 0 4px;
+    font-family: var(--font-display);
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--gray-100);
+  }}
+  .card .count {{ font-size: 12px; color: var(--gray-500); margin-bottom: 16px; }}
+  .card .count strong {{ font-family: var(--font-mono); color: var(--purple-light); font-weight: 600; }}
+  td.col-rank {{ font-family: var(--font-mono); color: var(--purple-light); }}
+  td.col-count {{ font-family: var(--font-mono); color: var(--gray-100); }}
+  .table-wrap {{ overflow-x: auto; }}
+  table {{ border-collapse: collapse; width: 100%; font-size: 13px; white-space: nowrap; }}
+  th, td {{ text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border-input); }}
+  th {{
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: var(--tracking-label);
+    text-transform: uppercase;
+    color: var(--gray-500);
+    font-weight: 500;
+  }}
+  td {{ color: var(--gray-300); }}
+  td.col-time {{ color: var(--gray-500); font-size: 12px; }}
+  td.col-mono {{ font-family: var(--font-mono); color: var(--gray-100); }}
+  td.col-ip {{ font-family: var(--font-mono); color: var(--gray-500); font-size: 11.5px; }}
+  .empty-row td {{ color: var(--gray-500); font-style: italic; }}
+  .status-badge {{
+    display: inline-flex; align-items: center; gap: 7px;
+    font-family: var(--font-mono); font-size: 11px; font-weight: 500;
+    letter-spacing: var(--tracking-label); text-transform: uppercase;
+  }}
+  .status-dot {{ width: 7px; height: 7px; border-radius: 50%; }}
+  .status-active {{ color: var(--green); }}
+  .status-active .status-dot {{ background: var(--green); box-shadow: 0 0 6px #34d399aa; }}
+  .status-completed {{ color: var(--red); }}
+  .status-completed .status-dot {{ background: var(--red); box-shadow: 0 0 6px #f87171aa; }}
+</style></head>
+<body>
+  <div class="page">
+    <div class="admin-header">
+      <div class="admin-logo" role="img" aria-label="Stitch3 Validator"></div>
+      <div>
+        <span class="kicker">Admin</span>
+        <span class="disclaimer">Owner-only usage log. Not linked from the public site.</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Ecosystem breakdown</h2>
+      <div class="count">Share of engagement lookups by ecosystem</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Ecosystem</th><th>Lookups</th><th>Share</th></tr></thead>
+          <tbody>{ecosystem_rows}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Most looked-up handles</h2>
+      <div class="count">Top 10 by lookup count</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Rank</th><th>Handle</th><th>Lookups</th></tr></thead>
+          <tbody>{_admin_rank_rows(top_handles)}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Most-checked campaigns</h2>
+      <div class="count">Top 10 by check count</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Rank</th><th>Campaign</th><th>Checks</th></tr></thead>
+          <tbody>{_admin_rank_rows(top_campaigns)}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Engagement Value lookups</h2>
+      <div class="count"><strong>{len(lookups)}</strong> shown, most recent first</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Time</th><th>Handle</th><th>Campaign</th><th>Ecosystem</th><th>Status</th><th>IP hash</th></tr></thead>
+          <tbody>
+            {lookup_rows or '<tr class="empty-row"><td colspan="6">No lookups logged yet.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Tweet checks</h2>
+      <div class="count"><strong>{len(checks)}</strong> shown, most recent first</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Time</th><th>Brief</th><th>Verdict</th><th>IP hash</th></tr></thead>
+          <tbody>
+            {check_rows or '<tr class="empty-row"><td colspan="4">No checks logged yet.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</body></html>"""
+    return HTMLResponse(content=page)
+
+
 @app.post("/evaluate", response_model=EvaluateResponse)
 def evaluate(req: EvaluateRequest, request: Request):
     _enforce_rate_limit(request)
@@ -438,6 +735,12 @@ def evaluate(req: EvaluateRequest, request: Request):
         )
     meets_brief = len(checks) == NUM_LLM_CHECKS and all(c.verdict == "YES" for c in checks)
     _record_check(_client_ip(request), meets_brief)
+    log_event(
+        "tweet_check",
+        brief_id=req.brief_id,
+        verdict="YES" if meets_brief else "NO",
+        ip_hash=hash_ip(_client_ip(request)),
+    )
 
     return EvaluateResponse(
         meets_brief=meets_brief,
@@ -494,6 +797,12 @@ def evaluate_stream(req: EvaluateRequest, request: Request):
 
         meets_brief = len(checks) == NUM_LLM_CHECKS and all(c.verdict == "YES" for c in checks)
         _record_check(_client_ip(request), meets_brief)
+        log_event(
+            "tweet_check",
+            brief_id=req.brief_id,
+            verdict="YES" if meets_brief else "NO",
+            ip_hash=hash_ip(_client_ip(request)),
+        )
         final = {
             "type": "done",
             "meets_brief": meets_brief,

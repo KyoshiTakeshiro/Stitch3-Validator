@@ -1,6 +1,6 @@
 # Stitch3 Validator
 
-Stitch3 Validator helps Bitcast creators check whether a draft X post is likely to satisfy a campaign brief before publishing. Instead of posting first and discovering afterward that a tweet failed validation, users can paste their draft, select a campaign, and receive an instant pass/fail evaluation using the same evaluation logic as the Bitcast/Stitch3 validator.
+Stitch3 Validator is a toolkit for Bitcast creators, built around two tools: **Tweet Validator**, which checks whether a draft X post is likely to satisfy a campaign brief before publishing, and **Engagement Value**, which shows what every other account's quote or retweet is actually worth to a specific creator on a given campaign. Instead of posting first and discovering afterward that a tweet failed validation — or guessing at who's actually worth engaging with — creators get instant, campaign-specific feedback for both.
 
 **Why this project is useful**
 
@@ -17,6 +17,10 @@ This tool is built to replicate the actual validator's brief-evaluation logic as
 - **Deliberately stricter than the real validator's own multi-check strategy.** The real validator runs up to 3 independent evaluation checks per tweet and accepts it as compliant if *any* check passes. This tool runs the same 3 independent checks (including the same per-check text differentiator the validator uses internally, so each check is a genuinely independent judgment rather than 3 repeats of the same answer) but requires *all 3* to pass, stopping early at the first failure. This is an intentional deviation, not a fidelity gap: since a false "pass" here is far more costly to a creator than a false "fail" (they'd post believing it's compliant, only to have the real validator disagree), the tool is tuned to be a conservative predictor rather than an exact replica of the validator's own leniency.
 
 Because of that, a tweet can occasionally fail here even though the real validator, using its own more lenient any-1-of-3 rule, would have passed it — that trade-off is intentional. Results can also vary slightly between runs on borderline tweets, since each of the 3 checks is an independent LLM judgment — that's expected, not a bug.
+
+**Engagement Value**
+
+The Engagement Value tab reproduces Bitcast's own public scoring formula so a creator can see, per campaign, what every other considered account's quote or retweet is actually worth to them. Pick an ecosystem (Bittensor / Perp DEXs / Prediction Markets) and a campaign, and the tool shows a ranked leaderboard of every account considered for that campaign's ecosystem snapshot. Enter your own X handle to get a personalized view: your influence, rank, and baseline score, plus a per-account quote/retweet value that accounts for prior-interaction history between you and each account (a higher "Ties" score between two accounts slightly discounts the value, discouraging accounts that already engage each other from inflating each other's numbers). This tool doesn't call an LLM at all — it's a direct, deterministic calculation against Bitcast's public campaign and ecosystem-map data, so no `CHUTES_API_KEY` is needed to use it.
 
 **Getting Started**
 
@@ -59,11 +63,12 @@ Because of that, a tweet can occasionally fail here even though the real validat
 
    Visit [http://localhost:8000](http://localhost:8000). You should see the Stitch3 Validator UI.
 
-6. **Select a campaign brief, paste your draft tweet, and run the evaluation.**
+6. **Pick a tab, then use either tool.**
 
-   - Pick an ecosystem (Bittensor / Perp DEXs / Prediction Markets), then choose a campaign from the **Campaign brief** dropdown.
-   - Paste your draft tweet into the **Draft tweet** field.
-   - Click **Check against brief**. The tool runs up to 3 independent checks and only passes the tweet if *all 3* agree — stricter than the real validator's own any-1-of-3 rule (see above) — returning a pass/fail verdict, with a reason shown if it fails.
+   The **Tweet Validator** and **Engagement Value** tabs each have their own ecosystem/campaign selector and remember your last selection independently — switch between them at any time.
+
+   - **Tweet Validator**: choose a campaign from the **Campaign brief** dropdown, paste your draft tweet into the **Draft tweet** field, then click **Check against brief**. The tool runs up to 3 independent checks and only passes the tweet if *all 3* agree — stricter than the real validator's own any-1-of-3 rule (see above) — returning a pass/fail verdict, with a reason shown if it fails.
+   - **Engagement Value**: choose a campaign, then enter your X handle to see your influence, rank, and baseline score for that campaign, plus a ranked table of what every other account's quote or retweet is worth to you. Optionally enter another account's handle to filter the table down to just them.
 
 **Maintainers & Contributions**
 

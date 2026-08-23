@@ -197,3 +197,4 @@ fidelity-baseline.json
 
 # Runtime data (persisted counters etc.), not source
 stats.json
+activity_log.jsonl
