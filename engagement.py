@@ -115,6 +115,35 @@ async def ecosystem_maps_for_campaign(manifest: dict, campaign: dict, ecosystem_
     return maps
 
 
+async def warm_cache() -> None:
+    """Pre-fetch the manifest and the ecosystem map(s) each ecosystem's
+    most recent campaign needs, so the cold-cache network cost (fetching
+    the manifest, then a multi-hundred-KB ecosystem map per pool from
+    Bitcast's API) lands on server startup instead of on whichever real
+    visitor happens to open the Engagement Value tab first after a
+    deploy/restart. _map_cache has no TTL (see fetch_ecosystem_map), so
+    once warm this stays warm until the process restarts again -- this
+    only needs to run once per startup, not on a timer. Best-effort: if
+    Bitcast's API is briefly down at the exact moment of startup, the
+    first real request just falls back to fetching it live as before."""
+    try:
+        manifest = await fetch_manifest()
+    except HTTPException:
+        return
+    for ecosystem_id in ALLOWED_ECOSYSTEMS:
+        campaigns = sorted(
+            (c for c in manifest["campaigns"] if ecosystem_id in c["pools"]),
+            key=lambda c: c["opens_at"],
+            reverse=True,
+        )
+        if not campaigns:
+            continue
+        try:
+            await ecosystem_maps_for_campaign(manifest, campaigns[0], ecosystem_id)
+        except HTTPException:
+            continue
+
+
 def considered_accounts_for_campaign(maps: list[dict], stale_decay: float = STALE_DECAY) -> tuple[dict, dict]:
     """Mirrors campaigns.considered_accounts_for_campaign: latest map's
     accounts at full influence, plus accounts from older maps that have

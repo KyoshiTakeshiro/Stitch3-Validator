@@ -29,6 +29,7 @@ from pydantic import BaseModel
 
 from activity_log import hash_ip, log_event, read_events
 from engagement import router as engagement_router
+from engagement import warm_cache as engagement_warm_cache
 from prompts import generate_brief_evaluation_prompt
 
 load_dotenv()
@@ -78,6 +79,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(engagement_router, prefix="/api/engagement")
+
+
+@app.on_event("startup")
+async def _warm_engagement_cache_on_startup() -> None:
+    # engagement.py's ecosystem-map cache has no TTL (see fetch_ecosystem_map),
+    # so the cold-cache network round-trip to Bitcast's API only ever needs to
+    # happen once per process lifetime -- do it here, at boot, instead of
+    # letting it land on whichever real visitor opens the Engagement Value
+    # tab first after a deploy/restart. Fire-and-forget: don't hold up the
+    # server actually starting to accept requests, and a failure here is
+    # harmless since the normal request-time fetch is still the fallback.
+    import asyncio
+
+    asyncio.create_task(engagement_warm_cache())
 
 # /evaluate and /evaluate/stream are the only endpoints that spend real money
 # (each check is a Chutes API call against our own key) -- /briefs and the
