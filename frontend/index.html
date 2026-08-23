@@ -419,7 +419,11 @@
   .eng-handle-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   .eng-handle-row .field-label { margin-top: 24px; }
   @media (max-width: 480px) {
-    .eng-handle-row { grid-template-columns: 1fr; gap: 0; }
+    .eng-handle-row { gap: 10px; }
+    .eng-handle-row .field-label {
+      font-size: 11px;
+      white-space: nowrap;
+    }
   }
   .card > .field-label:first-child { margin-top: 0; }
 
