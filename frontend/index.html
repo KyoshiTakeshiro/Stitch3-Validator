@@ -2013,7 +2013,7 @@ fitModeTabs();
     return `${ENG_API}/avatar/${encodeURIComponent(username)}`;
   }
   const AVATAR_FALLBACK = "data:image/svg+xml," + encodeURIComponent(
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#6c7280"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4.4 3.6-8 8-8s8 3.6 8 8v1H4v-1z"/></svg>`
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 1.6 24 24" fill="#6c7280"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4.4 3.6-8 8-8s8 3.6 8 8v1H4v-1z"/></svg>`
   );
   window.onEngAvatarError = function (img) {
     // Guard on the src rather than nulling onerror: nulling it made this a
@@ -2545,7 +2545,7 @@ const modeEngagementCard = document.getElementById("engagement-card");
 const modePlaceholderCard = document.getElementById("placeholder-card");
 const modeIntro = document.getElementById("mode-intro");
 const MODE_INTRO_CHECK = "Choose your campaign brief, paste or write your draft tweet, and check if it would pass validator review before posting it on X. Built to replicate the real Bitcast validator.";
-const MODE_INTRO_ENGAGEMENT = "Choose campaign, enter your X handle, and see what every other account’s retweet or quote is worth. The same account can score differently under a different campaign.";
+const MODE_INTRO_ENGAGEMENT = "Choose your campaign, enter your X handle, and see what every other account’s retweet or quote is worth. The same account can score differently under another campaign.";
 const MODE_INTRO_PLACEHOLDER = "";
 modeTabs.forEach(tab => {
   tab.addEventListener("click", () => {
