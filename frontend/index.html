@@ -444,10 +444,11 @@
 
   .tweet-input-wrap { position: relative; }
   .tweet-input-wrap textarea { padding-right: 38px; }
-  #tweet-clear-btn {
+  .input-clear-btn {
     position: absolute;
-    top: 10px;
+    top: 50%;
     right: 10px;
+    transform: translateY(-50%);
     width: 22px;
     height: 22px;
     padding: 0;
@@ -463,7 +464,10 @@
     line-height: 1;
     cursor: pointer;
   }
-  #tweet-clear-btn:hover { color: var(--gray-100); border-color: var(--border-accent); }
+  .input-clear-btn:hover { color: var(--gray-100); border-color: var(--border-accent); }
+  /* The tweet textarea grows tall as you type, so its clear button stays
+     pinned to the top-right corner instead of vertically centering with it. */
+  #tweet-clear-btn { top: 10px; transform: none; }
 
   .brief-text { font-size: 13px; color: var(--gray-500); margin-top: 10px; line-height: 1.5; }
   .brief-text a { color: var(--purple-light); text-decoration: none; }
@@ -991,7 +995,18 @@
   .fade-target { transition: opacity 0.13s ease; }
   .fade-target.value-fade { opacity: 0; }
 
-  #eng-table-card { margin-top: 24px; }
+  #eng-table-card { position: relative; margin-top: 24px; }
+  .table-clear-btn {
+    position: absolute;
+    top: -10px;
+    right: -10px;
+    transform: none;
+    display: none;
+    background: var(--black-2);
+    box-shadow: 0 4px 12px #0009;
+    z-index: 2;
+  }
+  .table-clear-btn.is-visible { display: flex; }
 
   .relationship-toggle {
     display: flex;
@@ -1170,7 +1185,7 @@
     <label class="field-label" for="tweet-input">Draft tweet</label>
     <div class="tweet-input-wrap">
       <textarea id="tweet-input" placeholder="Paste your draft tweet here..."></textarea>
-      <button type="button" id="tweet-clear-btn" aria-label="Clear draft tweet" style="display:none;">✕</button>
+      <button type="button" id="tweet-clear-btn" class="input-clear-btn" aria-label="Clear draft tweet" style="display:none;">✕</button>
     </div>
 
     <button id="evaluate-btn">Check against brief</button>
@@ -2092,9 +2107,15 @@ loadStats();
     onSelect: (username) => applyTableFilter(username),
   });
 
+  function updateFilterClearBtn() {
+    const btn = document.getElementById("eng-filter-clear-btn");
+    if (btn) btn.classList.toggle("is-visible", !!tableFilterQuery);
+  }
+
   function applyTableFilter(username) {
     tableFilterQuery = username.toLowerCase();
     currentPage = 1;
+    updateFilterClearBtn();
     renderTable();
   }
 
@@ -2236,6 +2257,7 @@ loadStats();
     if (document.getElementById("eng-table-card")) return;
     resultContainer.insertAdjacentHTML("beforeend", `
     <div class="card" id="eng-table-card">
+      <button type="button" id="eng-filter-clear-btn" class="input-clear-btn table-clear-btn" aria-label="Clear filter and show full rankings">✕</button>
       <div id="eng-relationship-info" style="display:none;">
         <label class="relationship-toggle" id="eng-relationship-toggle-row">
           <input type="checkbox" id="eng-relationship-only-toggle">
@@ -2249,6 +2271,14 @@ loadStats();
     document.getElementById("eng-relationship-only-toggle").addEventListener("change", (e) => {
       relationshipOnly = e.target.checked;
       currentPage = 1;
+      renderTable();
+    });
+    document.getElementById("eng-filter-clear-btn").addEventListener("click", () => {
+      filterInput.value = "";
+      tableFilterQuery = "";
+      currentPage = 1;
+      filterAutocomplete.close();
+      updateFilterClearBtn();
       renderTable();
     });
   }
@@ -2429,6 +2459,7 @@ loadStats();
     if (!filterInput.value.trim()) {
       tableFilterQuery = "";
       currentPage = 1;
+      updateFilterClearBtn();
       renderTable();
     }
   });
