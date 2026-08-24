@@ -7,19 +7,60 @@ restructure -- formerly bitcast/validator/clients/prompts.py) so this tool's
 evaluation logic matches what real validators run as closely as possible.
 Re-fetch from that repo if validator behavior changes.
 
-Currently supported versions: v1, v2, v5 (default: v1)
+Currently supported versions: v1, v2, v5, v6 (default: v1)
 
-v1 was rewritten upstream 2026-08-21 (commit 9d6348b, "simplify campaign
-prompt versions") to drop the "must not be negative or critical of the
-sponsor" rule entirely -- it now just asks whether the post follows the
-brief's own stated instructions, nothing sponsor-specific baked in. v3 and
-v4 were retired in the same commit; campaigns can now only specify 1, 2, or
-5, so those two generators and their PROMPT_GENERATORS entries were removed
-to match.
+v1 was briefly rewritten upstream on 2026-08-21 (commit 9d6348b, "simplify
+campaign prompt versions") to drop the "must not be negative or critical of
+the sponsor" rule entirely. That was reverted upstream on 2026-08-23 (commit
+edae8b5, "fix: preserve immutable campaign prompt versions") since existing
+campaigns depend on v1's exact wording staying frozen -- v1 below is the
+restored, original sponsor-oriented text with the criticism ban intact. The
+sponsor-neutral "just follow the brief" text introduced by 9d6348b didn't
+disappear in the revert -- it moved to the new v6 below, which a campaign
+must now opt into explicitly rather than getting by default. v3 and v4
+remain retired (dropped by 9d6348b, never restored).
 """
 
 
 def generate_brief_evaluation_prompt_v1(brief, tweet):
+    return (
+        "///// SPONSOR BRIEF /////\n"
+        f"{brief['brief']}\n\n"
+        "///// TWEET /////\n"
+        f"{tweet}\n\n"
+        "///// YOUR TASK /////\n"
+        "You are the sponsor's review agent. Decide—objectively—whether this tweet **fully** satisfies the brief.\n"
+        "**Important Context**\n"
+        "• The brief requirements are **minimum requirements** - creators are may choose to go deeper into the topic area - although this is not mandatory\n"
+        "Additional requirement: The tweet must not be negative or critical of the sponsor.\n"
+        "**Step-by-step instructions**\n\n"
+        "1. **Auto-number** each requirement in the brief (1, 2, 3 …) in the order it appears.\n"
+        "2. For every numbered requirement:\n"
+        "   • Search the tweet.\n"
+        "   • If you find evidence, mark **Met** and provide:\n"
+        "       – a 3-15-word quote extracted verbatim from the tweet\n"
+        "   • If no clear evidence or you are **uncertain**, mark **Not Met**.\n"
+        "3. **If any item fails → Verdiction = NO.**\n\n"
+        "**Important accuracy rules**\n"
+        "• Do **not** invent timestamps. If a timestamp is uncertain, mark the item Not Met.\n"
+        "• Fabricated quotes automatically fail that item.\n"
+        "• When in doubt, choose **NO**.\n"
+        "**Response format (exactly):**\n"
+        "```\n"
+        "## Requirement-by-Requirement\n"
+        "- Req 1: [requirement text] — Met / Not Met — \"quoted evidence\" (start-sec or range)\n"
+        "- Req 2: ...\n"
+        "...\n"
+        "## Verdict\n"
+        "YES or NO\n"
+        "## Summary\n"
+        "Brief 1 sentence explanation of why the content did or did not meet the brief requirements.\n"
+        "```\n"
+        "Be concise and remember: fabricated evidence = Not Met."
+    )
+
+
+def generate_brief_evaluation_prompt_v6(brief, tweet):
     return (
         "///// CAMPAIGN BRIEF /////\n"
         f"{brief['brief']}\n\n"
@@ -149,6 +190,7 @@ PROMPT_GENERATORS = {
     1: generate_brief_evaluation_prompt_v1,
     2: generate_brief_evaluation_prompt_v2,
     5: generate_brief_evaluation_prompt_v5,
+    6: generate_brief_evaluation_prompt_v6,
 }
 
 

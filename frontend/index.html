@@ -2584,11 +2584,11 @@ modeTabs.forEach(tab => {
 // automatically, so nothing needs to be manually removed later.
 const UPDATE_ITEMS = [
   {
-    id: "2026-08-21-sponsor-negativity-dropped",
-    date: "2026-08-21",
-    title: "Sponsor negativity rule dropped.",
-    text: "The default evaluation (prompt version 1) no longer automatically bans criticizing the sponsor, it now just checks whether your post follows exactly what's written in the brief. If a sponsor still wants to ban negative coverage, they now have to write that into the brief text directly.",
-    url: "https://github.com/bitcast-network/bitcast-x/commit/9d6348b1cffa0e949db2d58f04d35bc263349ef9",
+    id: "2026-08-23-sponsor-negativity-restored",
+    date: "2026-08-23",
+    title: "Sponsor negativity rule restored.",
+    text: "The change a few days ago that let the default evaluation (prompt version 1) skip the sponsor-negativity check has been reverted upstream. Version 1 is back to its original behavior: criticizing the sponsor is an automatic fail again. The more open-ended, sponsor-neutral check that briefly lived at version 1 didn't disappear, it moved to a new prompt version 6 that a campaign can opt into.",
+    url: "https://github.com/bitcast-network/bitcast-x/commit/edae8b5e4cb6c5bc896080a8c9ac0e14c9378421",
   },
   {
     id: "2026-08-14-manual-tweet-submission",
