@@ -2206,7 +2206,24 @@ fitModeTabs();
     }
   }
 
-  async function loadCampaigns() {
+  // Split into a cheap "just populate the dropdown" step (loadCampaignsList,
+  // safe to fire eagerly on every page load like the Tweet Validator's
+  // loadBriefs -- no images, near-instant off the server's warmed manifest
+  // cache) and a "render this campaign's results" step (showCampaignResults,
+  // which fetches the leaderboard/accounts and triggers avatar image loads).
+  // Keeping the results step deferred until the tab is actually opened
+  // preserves the original bandwidth-conscious intent: most visitors only
+  // ever use the Tweet Validator tab and should never trigger avatar fetches
+  // for a panel they never look at. The trigger button/dropdown itself,
+  // though, can and should show real data instantly like the brief selector
+  // does, since that costs nothing.
+  let campaignsListPromise = null;
+  function ensureCampaignsList() {
+    if (!campaignsListPromise) campaignsListPromise = loadCampaignsList();
+    return campaignsListPromise;
+  }
+
+  async function loadCampaignsList() {
     try {
       const resp = await fetch(`${ENG_API}/campaigns?ecosystem_id=${encodeURIComponent(selectedEcosystem)}`);
       if (!resp.ok) throw new Error("Failed to load campaigns");
@@ -2215,14 +2232,28 @@ fitModeTabs();
       selectedCampaignId = restoredCampaignValid ? pendingRestoredCampaignId : (campaigns.length ? campaigns[0].id : null);
       pendingRestoredCampaignId = null;
       renderCampaignOptions();
-      loadCampaignAccounts(selectedCampaignId);
-      if (handleInput.value.trim()) {
-        runLookup();
-      } else {
-        loadLeaderboard(selectedCampaignId);
-      }
     } catch (e) {
       errorContainer.innerHTML = `<div class="load-error">Couldn't load campaigns from Bitcast. ${escapeHtml(e.message)}</div>`;
+      throw e;
+    }
+  }
+
+  function showCampaignResults() {
+    loadCampaignAccounts(selectedCampaignId);
+    if (handleInput.value.trim()) {
+      runLookup();
+    } else {
+      loadLeaderboard(selectedCampaignId);
+    }
+  }
+
+  async function loadCampaigns() {
+    campaignsListPromise = loadCampaignsList();
+    try {
+      await campaignsListPromise;
+      showCampaignResults();
+    } catch (e) {
+      // Error already surfaced by loadCampaignsList.
     }
   }
 
@@ -2548,9 +2579,18 @@ fitModeTabs();
   window.initEngagementPanel = function () {
     if (initialized) return;
     initialized = true;
-    renderEcosystemTabs();
-    loadCampaigns();
+    ensureCampaignsList().then(showCampaignResults).catch(() => {});
   };
+
+  // Eagerly prime the ecosystem tabs + campaign dropdown on every page load,
+  // same as the Tweet Validator's brief selector -- so switching to this tab
+  // shows a populated campaign selector instantly instead of a blank/loading
+  // one. Deliberately does NOT trigger showCampaignResults() here (see the
+  // comment on loadCampaignsList/showCampaignResults above): that's the part
+  // that fetches the leaderboard and avatar images, and stays deferred until
+  // someone actually opens this tab.
+  renderEcosystemTabs();
+  ensureCampaignsList();
 })();
 
 const modeTabs = document.querySelectorAll(".mode-tab");
@@ -2585,6 +2625,20 @@ modeTabs.forEach(tab => {
     }
   });
 });
+
+// Prefetch the Engagement Value tab's leaderboard/avatar-heavy results on
+// hover or keyboard focus of its own tab button, not on page load -- most
+// visitors never open this tab and shouldn't pay for its avatar fetches
+// (see the comment above window.initEngagementPanel), but the tiny minority
+// who do click it usually hover the button first, so by the time the click
+// actually lands the fetch has often already resolved. initEngagementPanel
+// is idempotent (guarded by its own `initialized` flag), so calling it here
+// and again on click is safe -- the second call is a no-op.
+const engagementTabButton = [...modeTabs].find(t => t.dataset.mode === "engagement");
+if (engagementTabButton) {
+  engagementTabButton.addEventListener("mouseenter", () => window.initEngagementPanel(), { once: true });
+  engagementTabButton.addEventListener("focus", () => window.initEngagementPanel(), { once: true });
+}
 
 // Running list of upstream Bitcast-validator-behavior notes worth surfacing to
 // miners. Add new entries here (e.g. from the daily fidelity-check routine's
