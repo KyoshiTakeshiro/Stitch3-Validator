@@ -207,6 +207,14 @@
     letter-spacing: -0.01em;
   }
   .disclaimer { font-size: 13.5px; color: var(--gray-500); }
+  .kicker-row { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .version-tag {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: var(--tracking-label);
+    color: var(--gray-500);
+  }
 
   .theme-toggle {
     position: fixed;
@@ -1143,7 +1151,10 @@
   <header class="site-header">
     <div class="header-logo" role="img" aria-label="Stitch3 Validator"></div>
     <div class="header-meta">
-      <span class="kicker">Stitch3 Validator</span>
+      <span class="kicker-row">
+        <span class="kicker">Stitch3 Validator</span>
+        <span class="version-tag" id="version-tag" title="Validator logic version">v2.0</span>
+      </span>
       <span class="disclaimer">Unofficial community tool, not affiliated with Bitcast or Stitch3</span>
     </div>
   </header>
