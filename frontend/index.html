@@ -2444,6 +2444,15 @@ fitModeTabs();
     grid.classList.add("values-tight");
   }
 
+  // JetBrains Mono loads with display=swap, so a cold page load can still be
+  // rendering .value in a fallback font when fitSummaryValues() first
+  // measures it. The fallback's narrower metrics can make text look like it
+  // fits when the real webfont, once it swaps in, no longer does -- re-check
+  // once fonts are actually ready so the shrink classes reflect real widths.
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(() => fitSummaryValues());
+  }
+
   function updateResultValues(data) {
     const fields = [
       ["eng-summary-avatar", el => { el.src = avatarUrl(data.handle); }],
