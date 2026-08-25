@@ -10,11 +10,13 @@ prediction_markets) -- same pool ids the Pre-Submission Check tool uses.
 """
 
 import time
+from typing import Optional
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from activity_log import hash_ip, log_event
+from legacy_briefs import get_cached_legacy_briefs
 
 BITCAST_API_BASE = "https://bitcast-api.bitcast.network"
 MANIFEST_URL = f"{BITCAST_API_BASE}/api/v2/public/x/campaign-manifest-v4"
@@ -47,6 +49,7 @@ def _client_ip(request: Request) -> str:
 _manifest_cache: dict = {"data": None, "fetched_at": 0.0}
 _map_cache: dict[str, dict] = {}
 _avatar_cache: dict[str, tuple[bytes, str, float]] = {}
+_augmented_manifest_cache: dict = {"data": None, "manifest_fetched_at": None}
 
 
 async def fetch_manifest() -> dict:
@@ -115,6 +118,86 @@ async def ecosystem_maps_for_campaign(manifest: dict, campaign: dict, ecosystem_
     return maps
 
 
+def _synthesize_legacy_campaign(item: dict) -> Optional[dict]:
+    """Reshape one legacy x-briefs item into the live manifest's campaign
+    shape (access.campaign_id / pools / opens_at / closes_at), so it can
+    flow through get_campaign, ecosystem_maps_for_campaign, etc. exactly
+    like a real manifest entry -- no separate "legacy campaign" code path
+    to keep in sync in the scoring endpoints below."""
+    pool = item.get("pool")
+    start_date = item.get("start_date")
+    end_date = item.get("end_date")
+    if not item.get("id") or not pool or not start_date or not end_date:
+        return None
+    return {
+        "access": {"campaign_id": item["id"], "mining_protocol": "legacy_connection"},
+        "display": item.get("display") or item["id"],
+        "pools": [pool],
+        "opens_at": f"{start_date}T00:00:00Z",
+        "closes_at": f"{end_date}T23:59:59Z",
+    }
+
+
+async def fetch_augmented_manifest() -> dict:
+    """The live manifest plus legacy x-briefs campaigns (see legacy_briefs.py)
+    not already in it, per ecosystem cut off at the oldest legacy campaign
+    that still has real engagement data. Most of the 81 legacy campaigns
+    ran before this manifest's oldest retained ecosystem map (confirmed
+    live: the earliest tao map is from 2026-08-02, while the legacy
+    archive starts at 2025-11-12) -- selecting one of those would 404 the
+    instant someone picks it, so rather than hardcoding a date, this finds
+    the actual oldest working campaign per ecosystem (the one whose window
+    overlaps that ecosystem's oldest retained map) and drops only the
+    data-less campaigns older than it. A data-less campaign at or after
+    that cutoff is left in rather than assumed impossible -- it would
+    still surface the existing "no ecosystem map data yet" error rather
+    than being silently dropped.
+    Cached alongside the base manifest (recomputed only when it refetches)."""
+    manifest = await fetch_manifest()
+    if _augmented_manifest_cache["manifest_fetched_at"] == _manifest_cache["fetched_at"]:
+        return _augmented_manifest_cache["data"]
+
+    live_ids = {c["access"]["campaign_id"] for c in manifest["campaigns"]}
+    candidates = [
+        campaign
+        for item in get_cached_legacy_briefs()
+        if item.get("id") not in live_ids
+        and (campaign := _synthesize_legacy_campaign(item)) is not None
+    ]
+
+    has_data: dict[str, bool] = {}
+    for campaign in candidates:
+        try:
+            maps = await ecosystem_maps_for_campaign(manifest, campaign, campaign["pools"][0])
+        except HTTPException:
+            maps = []
+        has_data[campaign["access"]["campaign_id"]] = bool(maps)
+
+    oldest_working_opens_at: dict[str, str] = {}
+    for campaign in candidates:
+        if not has_data[campaign["access"]["campaign_id"]]:
+            continue
+        ecosystem_id = campaign["pools"][0]
+        current = oldest_working_opens_at.get(ecosystem_id)
+        if current is None or campaign["opens_at"] < current:
+            oldest_working_opens_at[ecosystem_id] = campaign["opens_at"]
+
+    synthesized = []
+    for campaign in candidates:
+        campaign_id = campaign["access"]["campaign_id"]
+        cutoff = oldest_working_opens_at.get(campaign["pools"][0])
+        if not has_data[campaign_id] and (cutoff is None or campaign["opens_at"] < cutoff):
+            continue
+        synthesized.append(campaign)
+
+    augmented = (
+        manifest if not synthesized else {**manifest, "campaigns": manifest["campaigns"] + synthesized}
+    )
+    _augmented_manifest_cache["data"] = augmented
+    _augmented_manifest_cache["manifest_fetched_at"] = _manifest_cache["fetched_at"]
+    return augmented
+
+
 async def warm_cache() -> None:
     """Pre-fetch the manifest and the ecosystem map(s) each ecosystem's
     most recent campaign needs, so the cold-cache network cost (fetching
@@ -181,7 +264,7 @@ def scale_factor(relationship_score: float) -> float:
 @router.get("/campaigns")
 async def list_campaigns(ecosystem_id: str = "tao"):
     validate_ecosystem(ecosystem_id)
-    manifest = await fetch_manifest()
+    manifest = await fetch_augmented_manifest()
     campaigns = [
         {
             "id": c["access"]["campaign_id"],
@@ -199,7 +282,7 @@ async def list_campaigns(ecosystem_id: str = "tao"):
 @router.get("/campaigns/{campaign_id}/accounts")
 async def campaign_accounts(campaign_id: str, ecosystem_id: str = "tao"):
     validate_ecosystem(ecosystem_id)
-    manifest = await fetch_manifest()
+    manifest = await fetch_augmented_manifest()
     campaign = get_campaign(manifest, campaign_id)
     if ecosystem_id not in campaign["pools"]:
         raise HTTPException(status_code=400, detail=f"This campaign isn't in the {ecosystem_id} ecosystem.")
@@ -217,7 +300,7 @@ async def leaderboard(campaign_id: str, ecosystem_id: str = "tao"):
     handle). Lets the ranking table render before a creator has entered
     their own handle; /lookup replaces this with handle-relative values."""
     validate_ecosystem(ecosystem_id)
-    manifest = await fetch_manifest()
+    manifest = await fetch_augmented_manifest()
     campaign = get_campaign(manifest, campaign_id)
     if ecosystem_id not in campaign["pools"]:
         raise HTTPException(status_code=400, detail=f"This campaign isn't in the {ecosystem_id} ecosystem.")
@@ -244,7 +327,7 @@ async def leaderboard(campaign_id: str, ecosystem_id: str = "tao"):
 @router.get("/lookup")
 async def lookup(campaign_id: str, handle: str, request: Request, ecosystem_id: str = "tao"):
     validate_ecosystem(ecosystem_id)
-    manifest = await fetch_manifest()
+    manifest = await fetch_augmented_manifest()
     campaign = get_campaign(manifest, campaign_id)
     if ecosystem_id not in campaign["pools"]:
         raise HTTPException(status_code=400, detail=f"This campaign isn't in the {ecosystem_id} ecosystem.")

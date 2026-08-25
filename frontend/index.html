@@ -2412,6 +2412,7 @@ fitModeTabs();
   async function loadLeaderboard(campaignId) {
     removeSummaryCard();
     setRelationshipInfoVisible(false);
+    errorContainer.innerHTML = "";
     if (!campaignId) {
       currentEngagers = [];
       renderTable();
@@ -2419,8 +2420,8 @@ fitModeTabs();
     }
     try {
       const resp = await fetch(`${ENG_API}/campaigns/${encodeURIComponent(campaignId)}/leaderboard?ecosystem_id=${encodeURIComponent(selectedEcosystem)}`);
-      if (!resp.ok) return;
       const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || "Something went wrong.");
       currentEngagers = data.engagers;
       sortKey = "rank";
       sortDir = 1;
@@ -2429,7 +2430,13 @@ fitModeTabs();
       ensureTableShell();
       renderTable();
     } catch (e) {
-      // Non-fatal: the leaderboard just stays empty until the next attempt.
+      // A legacy campaign (see fetch_augmented_manifest in engagement.py)
+      // can predate every ecosystem map Bitcast still retains, so it has
+      // no engagement data to show -- surface that instead of leaving a
+      // stale table from a previous campaign or a silent blank one.
+      document.getElementById("eng-table-card")?.remove();
+      currentEngagers = [];
+      errorContainer.innerHTML = `<div class="load-error">${escapeHtml(e.message)}</div>`;
     }
   }
 
@@ -2504,6 +2511,13 @@ fitModeTabs();
     } catch (e) {
       removeSummaryCard();
       setRelationshipInfoVisible(false);
+      // A campaign switch can fail (e.g. a legacy campaign with no
+      // ecosystem map data -- see fetch_augmented_manifest in
+      // engagement.py) while a table from the *previous* campaign is
+      // still on screen; leaving it up next to the error reads as if it
+      // still applies to the newly selected campaign.
+      document.getElementById("eng-table-card")?.remove();
+      currentEngagers = [];
       errorContainer.innerHTML = `<div class="load-error">${escapeHtml(e.message)}</div>`;
     } finally {
       handleInput.disabled = false;

@@ -30,16 +30,11 @@ from pydantic import BaseModel
 from activity_log import hash_ip, log_event, read_events
 from engagement import router as engagement_router
 from engagement import warm_cache as engagement_warm_cache
+from legacy_briefs import get_cached_legacy_briefs
 from prompts import generate_brief_evaluation_prompt
 
 load_dotenv()
 
-# Upstream retired this endpoint's data feed after their Aug 14 rewrite -- it
-# still 200s but silently stopped receiving new campaigns, topping out at
-# 074_nodexo (confirmed live: 075_bitcast through 079_green_compute exist on
-# the new endpoint below but never appeared here). Kept only as a comment so
-# the dead end isn't rediscovered from scratch if this ever needs revisiting:
-# "https://bitcast-api.bitcast.network/api/v2/validator/x-briefs"
 BITCAST_CAMPAIGN_MANIFEST_ENDPOINT = "https://bitcast-api.bitcast.network/api/v2/public/x/campaign-manifest-v4"
 BRAND_OVERVIEW_BASE_URL = "https://brand-overviews-x.s3.us-west-2.amazonaws.com"
 CHUTES_ENDPOINT = "https://llm.chutes.ai/v1/chat/completions"
@@ -339,7 +334,7 @@ def _fetch_normalized_briefs() -> list[dict]:
 
 
 def _lookup_brief(brief_id: str) -> dict:
-    briefs = _fetch_normalized_briefs()
+    briefs = _get_cached_briefs()
     brief = next((b for b in briefs if b["id"] == brief_id), None)
     if brief is None:
         raise HTTPException(status_code=404, detail=f"Brief '{brief_id}' not found")
@@ -417,12 +412,25 @@ def _record_check(ip: str, meets_brief: bool) -> None:
 
 def _get_cached_briefs() -> list[dict]:
     """Fast path: brief list only, no S3 checks. Shared by /briefs and the
-    server-rendered index page, both backed by the same 5-minute cache."""
+    server-rendered index page, both backed by the same 5-minute cache.
+
+    Merges the live manifest with the legacy archive (see
+    legacy_briefs.get_cached_legacy_briefs), live-manifest entries taking
+    precedence on an id collision (070_verathos through 074_nodexo appear
+    in both -- the live manifest's copy is the fresher one). This is the
+    one list every consumer reads (this endpoint's campaign selector,
+    _lookup_brief for /evaluate and /evaluate/stream, and
+    /briefs/brand-overviews' HEAD-check fan-out below), so a legacy
+    campaign works exactly like a live one everywhere in this app -- no
+    separate "legacy brief" code path to keep in sync."""
     now = time.time()
     if _briefs_cache["data"] is not None and now < _briefs_cache["expires_at"]:
         return _briefs_cache["data"]
 
-    items = _fetch_normalized_briefs()
+    live_items = _fetch_normalized_briefs()
+    live_ids = {b["id"] for b in live_items}
+    legacy_items = [b for b in get_cached_legacy_briefs() if b["id"] not in live_ids]
+    items = live_items + legacy_items
 
     _briefs_cache["data"] = items
     _briefs_cache["expires_at"] = now + BRIEFS_CACHE_TTL
@@ -443,7 +451,7 @@ def get_brand_overviews():
     if _overview_cache["data"] is not None and now < _overview_cache["expires_at"]:
         return _overview_cache["data"]
 
-    items = _fetch_normalized_briefs()
+    items = _get_cached_briefs()
     ids = [b["id"] for b in items]
 
     with ThreadPoolExecutor(max_workers=len(ids) or 1) as executor:
