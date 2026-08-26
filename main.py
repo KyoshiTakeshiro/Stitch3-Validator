@@ -22,13 +22,14 @@ import requests
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from activity_log import hash_ip, log_event, read_events
 from engagement import router as engagement_router
+from engagement import warm_avatars as engagement_warm_avatars
 from engagement import warm_cache as engagement_warm_cache
 from legacy_briefs import get_cached_legacy_briefs
 from prompts import generate_brief_evaluation_prompt
@@ -492,14 +493,43 @@ def _admin_rank_rows(counts: list[tuple[str, int]]) -> str:
     )
 
 
+@app.post("/admin/refresh-avatars", dependencies=[Depends(require_admin)])
+async def admin_refresh_avatars():
+    """Manually (re-)warms the Engagement Value avatar disk store -- see
+    engagement.warm_avatars's own docstring. There's deliberately no
+    automatic recurring refresh (removed by request); this is the only way
+    it happens after the initial one at process startup. Redirects back to
+    /admin with the result in the query string so the page can show what
+    happened without any client-side JS."""
+    stats = await engagement_warm_avatars()
+    params = "&".join(f"avatar_{k}={v}" for k, v in stats.items())
+    return RedirectResponse(url=f"/admin?avatar_refreshed=1&{params}", status_code=303)
+
+
 @app.get("/admin", response_class=HTMLResponse, dependencies=[Depends(require_admin)])
-def admin_panel():
+def admin_panel(
+    avatar_refreshed: bool = False,
+    avatar_considered: int = 0,
+    avatar_already_fresh: int = 0,
+    avatar_fetched: int = 0,
+    avatar_failed: int = 0,
+    avatar_budget_exhausted: bool = False,
+):
     """Owner-only view of raw usage: every engagement-value handle lookup
     and every tweet check, newest first. Gated by HTTP Basic Auth
     (require_admin) -- not linked from anywhere in the public UI. Styled to
     match the public site's own design tokens (frontend/index.html's :root
     block) rather than a bare utility page, since this is still a page the
     owner will look at regularly."""
+    avatar_toast_html = ""
+    if avatar_refreshed:
+        exhausted_note = " Daily fetch budget ran out partway through." if avatar_budget_exhausted else ""
+        avatar_toast_html = (
+            f'<div class="admin-toast">Avatar refresh: <strong>{avatar_fetched}</strong> fetched, '
+            f"{avatar_already_fresh} already fresh, {avatar_failed} failed, "
+            f"out of {avatar_considered} considered accounts checked.{exhausted_note}</div>"
+        )
+
     events = read_events(limit=500)
     lookups = [e for e in events if e.get("type") == "engagement_lookup"]
     checks = [e for e in events if e.get("type") == "tweet_check"]
@@ -662,6 +692,17 @@ def admin_panel():
   .status-active .status-dot {{ background: var(--green); box-shadow: 0 0 6px #34d399aa; }}
   .status-completed {{ color: var(--red); }}
   .status-completed .status-dot {{ background: var(--red); box-shadow: 0 0 6px #f87171aa; }}
+  .admin-btn {{
+    font-family: var(--font-body); font-size: 13px; font-weight: 600;
+    padding: 9px 16px; border: none; border-radius: var(--radius-control);
+    background: var(--gradient-brand); color: #050507; cursor: pointer;
+  }}
+  .admin-btn:hover {{ filter: brightness(1.05); }}
+  .admin-toast {{
+    font-size: 13px; color: var(--gray-300); background: var(--black-2);
+    border: 1px solid var(--border-card); border-radius: var(--radius-control);
+    padding: 12px 16px; margin-bottom: 24px;
+  }}
 </style></head>
 <body>
   <div class="page">
@@ -671,6 +712,15 @@ def admin_panel():
         <span class="kicker">Admin</span>
         <span class="disclaimer">Owner-only usage log. Not linked from the public site.</span>
       </div>
+    </div>
+
+    {avatar_toast_html}
+    <div class="card">
+      <h2>Engagement Value avatars</h2>
+      <div class="count">Fetches up to 20 new accounts' avatars to disk each run, highest-influence first, until every considered account eventually has one (see engagement.py). No automatic schedule; run this manually whenever coverage needs a top-up.</div>
+      <form method="post" action="/admin/refresh-avatars">
+        <button type="submit" class="admin-btn">Refresh avatars</button>
+      </form>
     </div>
 
     <div class="card">

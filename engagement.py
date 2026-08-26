@@ -9,7 +9,11 @@ Covers all 3 ecosystems Bitcast runs campaigns in (tao, hyperliquid,
 prediction_markets) -- same pool ids the Pre-Submission Check tool uses.
 """
 
+import asyncio
+import hashlib
+import json
 import time
+from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -34,6 +38,41 @@ ALLOWED_ECOSYSTEMS = {"tao", "hyperliquid", "prediction_markets"}
 MANIFEST_TTL = 300
 AVATAR_TTL = 6 * 3600
 
+# warm_avatars() spends its daily budget working through ecosystems in this
+# order, tao (Bittensor) first by request -- since the budget is shared and
+# small (AVATAR_DAILY_FETCH_BUDGET), an earlier ecosystem's considered list
+# is exhausted before a later one gets any budget at all, not just given a
+# head start. ALLOWED_ECOSYSTEMS itself stays a set (only used for
+# membership checks elsewhere) so this ordering lives in exactly one place.
+AVATAR_WARM_ECOSYSTEM_ORDER = ("tao", "hyperliquid", "prediction_markets")
+
+# Disk-backed avatar store -- see warm_avatars()/the /avatar route below for
+# how this is used. Local/VPS-only runtime data, not source (gitignored).
+AVATAR_STORE_DIR = Path(__file__).parent / "avatar_cache"
+AVATAR_REFRESH_SECONDS = 7 * 24 * 3600  # re-fetch a stored avatar at most weekly
+
+# unavatar.io's anonymous tier turned out to be a DAILY quota, not just a
+# burst/rate limit (confirmed live: a live call now returns
+# {"code": "ERATE", "message": "Daily anonymous rate limit reached..."}).
+# Spreading requests out over time doesn't help with a daily cap -- without
+# this budget, one warm_avatars() pass across a full considered-accounts
+# list (hundreds to low thousands of accounts per ecosystem) or a burst of
+# real visitor traffic could exhaust the entire day's quota in seconds.
+# This caps how many *new* live fetches (cache misses) this process will
+# attempt per UTC day, shared between warm_avatars() and live request-time
+# misses. warm_avatars() works through EVERY considered account across all
+# 3 ecosystems' current campaigns, highest-influence first, not just a
+# top-N slice -- it just never fetches more than this many per run, so
+# coverage grows by roughly this many genuinely new accounts each time
+# it's triggered (once daily at most makes sense, since the budget resets
+# on a UTC day boundary) until eventually every account has a stored
+# avatar. 20/day is a conservative guess pending real data on the
+# anonymous tier's actual ceiling; a registered unavatar API key
+# (unavatar.io/checkout, 50/day on their free tier) would raise this a lot
+# and is the real fix if coverage needs to grow faster than this.
+AVATAR_DAILY_FETCH_BUDGET = 20
+AVATAR_BUDGET_FILE = Path(__file__).parent / "avatar_fetch_budget.json"
+
 router = APIRouter()
 
 
@@ -48,8 +87,122 @@ def _client_ip(request: Request) -> str:
 
 _manifest_cache: dict = {"data": None, "fetched_at": 0.0}
 _map_cache: dict[str, dict] = {}
-_avatar_cache: dict[str, tuple[bytes, str, float]] = {}
+_avatar_cache: dict[str, tuple[bytes, str, float]] = {}  # in-memory L1, process-local
 _augmented_manifest_cache: dict = {"data": None, "manifest_fetched_at": None}
+_avatar_budget_lock = asyncio.Lock()
+
+
+def _today_utc() -> str:
+    return time.strftime("%Y-%m-%d", time.gmtime())
+
+
+async def _try_consume_avatar_budget() -> bool:
+    """Returns True and consumes one unit of today's live-fetch budget, or
+    False if today's budget is already spent. File-backed (not in-memory)
+    so the budget survives a restart -- a deploy shouldn't hand out a fresh
+    quota for free. Guarded by an asyncio.Lock since concurrent request
+    handlers can race on the read-modify-write otherwise."""
+    async with _avatar_budget_lock:
+        today = _today_utc()
+        try:
+            state = json.loads(AVATAR_BUDGET_FILE.read_text())
+        except (OSError, ValueError):
+            state = {}
+        if state.get("date") != today:
+            state = {"date": today, "used": 0}
+        if state["used"] >= AVATAR_DAILY_FETCH_BUDGET:
+            return False
+        state["used"] += 1
+        try:
+            AVATAR_BUDGET_FILE.write_text(json.dumps(state))
+        except OSError:
+            pass  # Best-effort -- worst case we slightly overspend the budget.
+        return True
+
+
+def _avatar_disk_paths(username: str) -> tuple[Path, Path]:
+    """Hash the (casefolded) username into the filename rather than using it
+    directly -- username is client-controlled input on the /avatar/{username}
+    route, and writing it straight into a filesystem path would be a path
+    traversal risk. The hash also sidesteps needing to sanitize whatever
+    characters a real X handle can contain."""
+    digest = hashlib.sha256(username.casefold().encode()).hexdigest()
+    return AVATAR_STORE_DIR / f"{digest}.img", AVATAR_STORE_DIR / f"{digest}.json"
+
+
+def _read_avatar_disk(username: str) -> Optional[tuple[bytes, str, float]]:
+    img_path, meta_path = _avatar_disk_paths(username)
+    try:
+        meta = json.loads(meta_path.read_text())
+        content = img_path.read_bytes()
+    except (OSError, ValueError, KeyError):
+        return None
+    return content, meta["content_type"], meta["fetched_at"]
+
+
+def _write_avatar_disk(username: str, content: bytes, content_type: str, fetched_at: float) -> None:
+    img_path, meta_path = _avatar_disk_paths(username)
+    try:
+        AVATAR_STORE_DIR.mkdir(exist_ok=True)
+        img_path.write_bytes(content)
+        meta_path.write_text(json.dumps({"content_type": content_type, "fetched_at": fetched_at}))
+    except OSError:
+        pass  # Best-effort -- a failed disk write just means no persistence for this one.
+
+
+async def _fetch_avatar_live(username: str) -> tuple[bytes, str]:
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.get(f"{AVATAR_BASE_URL}/{username}")
+        resp.raise_for_status()
+        content_type = resp.headers.get("content-type", "")
+        if not content_type.startswith("image/"):
+            raise ValueError("unavatar returned a non-image response")
+        return resp.content, content_type
+
+
+async def _get_avatar(username: str) -> tuple[bytes, str]:
+    """Three-tier lookup: in-memory (fast, per-process, AVATAR_TTL) -> disk
+    (persistent across restarts, AVATAR_REFRESH_SECONDS) -> live unavatar.io
+    fetch. Only a genuine cold cache (nothing in memory or on disk) or a
+    disk copy older than AVATAR_REFRESH_SECONDS reaches the live fetch --
+    warm_avatars() below works through every considered account,
+    highest-influence first, so the accounts real visitors are most likely
+    to look at tend to already be on disk before they ever ask for it. A
+    live fetch also costs one unit of
+    AVATAR_DAILY_FETCH_BUDGET -- once that's spent for the day, this falls
+    straight back to a stale copy (or a clean miss) without attempting the
+    request at all, since unavatar.io's daily quota means it would just
+    fail anyway."""
+    key = username.casefold()
+    now = time.time()
+
+    cached = _avatar_cache.get(key)
+    if cached and now - cached[2] < AVATAR_TTL:
+        return cached[0], cached[1]
+
+    disk = _read_avatar_disk(username)
+    if disk and now - disk[2] < AVATAR_REFRESH_SECONDS:
+        _avatar_cache[key] = disk
+        return disk[0], disk[1]
+
+    stale = cached or disk
+    if not await _try_consume_avatar_budget():
+        if stale:
+            return stale[0], stale[1]
+        raise HTTPException(status_code=502, detail="Avatar unavailable")
+
+    try:
+        content, content_type = await _fetch_avatar_live(username)
+    except (httpx.HTTPError, ValueError):
+        # Live fetch failed -- fall back to whatever's cached/stored, even
+        # if stale, rather than a broken image.
+        if stale:
+            return stale[0], stale[1]
+        raise HTTPException(status_code=502, detail="Avatar unavailable")
+
+    _avatar_cache[key] = (content, content_type, now)
+    _write_avatar_disk(username, content, content_type, now)
+    return content, content_type
 
 
 async def fetch_manifest() -> dict:
@@ -208,7 +361,12 @@ async def warm_cache() -> None:
     once warm this stays warm until the process restarts again -- this
     only needs to run once per startup, not on a timer. Best-effort: if
     Bitcast's API is briefly down at the exact moment of startup, the
-    first real request just falls back to fetching it live as before."""
+    first real request just falls back to fetching it live as before.
+
+    Also does the initial avatar disk-store warm (see warm_avatars) --
+    there's no recurring refresh loop; re-warming after that is manual
+    only, triggered via the admin panel's "Refresh avatars" action
+    (POST /admin/refresh-avatars in main.py)."""
     try:
         manifest = await fetch_manifest()
     except HTTPException:
@@ -225,6 +383,75 @@ async def warm_cache() -> None:
             await ecosystem_maps_for_campaign(manifest, campaigns[0], ecosystem_id)
         except HTTPException:
             continue
+
+    await warm_avatars()
+
+
+async def warm_avatars() -> dict:
+    """Works through EVERY considered account on each ecosystem's most
+    recently opened campaign -- not just a top-N slice -- fetching and
+    persisting to disk whichever ones aren't already cached (or have gone
+    stale, see AVATAR_REFRESH_SECONDS). Ecosystems are processed in
+    AVATAR_WARM_ECOSYSTEM_ORDER (tao/Bittensor first, by request), and
+    within an ecosystem, highest-influence account first. The only thing
+    that actually limits how much happens in one call is
+    AVATAR_DAILY_FETCH_BUDGET: once that's spent, this stops and picks up
+    again from wherever it left off next time it's called (already-cached
+    accounts are skipped instantly, so re-running doesn't redo work). Since
+    the budget is small and shared across ecosystems, an earlier ecosystem
+    in the order is fully exhausted before a later one gets any budget at
+    all -- with tao first, that means every tao account gets covered
+    before hyperliquid or prediction_markets sees a single fetch. Runs
+    once at startup (via warm_cache) and otherwise only when manually
+    triggered -- no automatic recurring schedule. Returns a small stats
+    dict so a manual trigger (the admin panel) can show what actually
+    happened."""
+    stats = {"considered": 0, "already_fresh": 0, "fetched": 0, "failed": 0, "budget_exhausted": False}
+    try:
+        manifest = await fetch_manifest()
+    except HTTPException:
+        return stats
+
+    ordered_usernames: list[str] = []
+    seen: set[str] = set()
+    for ecosystem_id in AVATAR_WARM_ECOSYSTEM_ORDER:
+        campaigns = sorted(
+            (c for c in manifest["campaigns"] if ecosystem_id in c["pools"]),
+            key=lambda c: c["opens_at"],
+            reverse=True,
+        )
+        if not campaigns:
+            continue
+        try:
+            maps = await ecosystem_maps_for_campaign(manifest, campaigns[0], ecosystem_id)
+            considered, _ = considered_accounts_for_campaign(maps)
+        except (HTTPException, ValueError):
+            continue
+        ranked = sorted(considered.items(), key=lambda kv: kv[1]["influence"], reverse=True)
+        for _, entry in ranked:
+            key = entry["display"].casefold()
+            if key not in seen:
+                seen.add(key)
+                ordered_usernames.append(entry["display"])
+
+    stats["considered"] = len(ordered_usernames)
+    now = time.time()
+    for username in ordered_usernames:
+        disk = _read_avatar_disk(username)
+        if disk and now - disk[2] < AVATAR_REFRESH_SECONDS:
+            stats["already_fresh"] += 1
+            continue
+        if not await _try_consume_avatar_budget():
+            stats["budget_exhausted"] = True
+            break
+        try:
+            content, content_type = await _fetch_avatar_live(username)
+        except (httpx.HTTPError, ValueError):
+            stats["failed"] += 1
+            continue
+        _write_avatar_disk(username, content, content_type, time.time())
+        stats["fetched"] += 1
+    return stats
 
 
 def considered_accounts_for_campaign(maps: list[dict], stale_decay: float = STALE_DECAY) -> tuple[dict, dict]:
@@ -399,31 +626,10 @@ async def lookup(campaign_id: str, handle: str, request: Request, ecosystem_id: 
 
 @router.get("/avatar/{username}")
 async def avatar(username: str):
-    """Proxy + cache unavatar.io lookups. unavatar's anonymous tier has a
-    very low daily request quota shared per source IP. Proxying here means
-    every visitor shares one server IP and one cache instead of each
-    browser spending its own quota directly against unavatar.io, and a
-    6h TTL means the same handle isn't re-fetched on every page view."""
-    key = username.casefold()
-    now = time.time()
-    cached = _avatar_cache.get(key)
-    if cached and now - cached[2] < AVATAR_TTL:
-        content, content_type, _ = cached
-        return Response(content=content, media_type=content_type, headers={"Cache-Control": "public, max-age=21600"})
-
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{AVATAR_BASE_URL}/{username}")
-            resp.raise_for_status()
-            content_type = resp.headers.get("content-type", "")
-            if not content_type.startswith("image/"):
-                raise ValueError("unavatar returned a non-image response")
-            content = resp.content
-    except (httpx.HTTPError, ValueError):
-        if cached:
-            content, content_type, _ = cached
-            return Response(content=content, media_type=content_type, headers={"Cache-Control": "public, max-age=21600"})
-        raise HTTPException(status_code=502, detail="Avatar unavailable")
-
-    _avatar_cache[key] = (content, content_type, now)
+    """Proxy + cache unavatar.io lookups (see _get_avatar above for the
+    memory -> disk -> live tiers). unavatar's anonymous tier has a very low
+    daily request quota shared per source IP -- proxying here means every
+    visitor shares one server IP and one cache instead of each browser
+    spending its own quota directly against unavatar.io."""
+    content, content_type = await _get_avatar(username)
     return Response(content=content, media_type=content_type, headers={"Cache-Control": "public, max-age=21600"})

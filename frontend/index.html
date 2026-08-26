@@ -1930,15 +1930,16 @@ fitModeTabs();
 (function () {
   const ENG_API = "/api/engagement";
   const PAGE_SIZE = 10;
-  // unavatar.io's anonymous tier has a very low shared-IP request quota (see
-  // /avatar/{username}'s own docstring in engagement.py). The table can list
-  // hundreds of accounts across many pages -- if every row fired a real
-  // avatar request, that quota would burn through fast and the one avatar
-  // that actually matters (the searcher's own, in the summary card) could
-  // start failing too. Only spend real requests on the top-ranked accounts
-  // someone's actually likely to look at; everything past that gets the
-  // local fallback icon with no network call at all.
-  const AVATAR_RANK_LIMIT = 20;
+  // Every row now requests a real avatar (see avatarUrl below) rather than
+  // only the top-ranked ones -- engagement.py's /avatar/{username} route is
+  // backed by a persistent disk cache (warmed on startup for the top 20 per
+  // campaign, refreshed weekly) with graceful fallback to the placeholder
+  // icon on a miss, same as before. unavatar.io's anonymous tier turned out
+  // to be a DAILY quota, not just a burst limit, so coverage for anything
+  // outside that warmed top-20 grows slowly (a handful of newly-seen
+  // accounts get cached per day, budget-limited server-side -- see
+  // AVATAR_DAILY_FETCH_BUDGET in engagement.py) rather than instantly on
+  // first view. That's an external limitation, not a bug here.
   const TIES_TOOLTIP = "A higher 'Ties' score slightly reduces the calculated value. This discourages accounts that already engage each other from inflating each other's numbers.";
   const MAX_SUGGESTIONS = 8;
 
@@ -2307,7 +2308,7 @@ fitModeTabs();
     const rowsHtml = pageRows
       .map(e => `<tr>
       <td class="col-left">#${e.rank}</td>
-      <td class="col-account col-left"><a class="account-cell" href="https://x.com/${encodeURIComponent(e.username)}" target="_blank" rel="noopener"><img class="avatar" src="${e.rank <= AVATAR_RANK_LIMIT ? avatarUrl(e.username) : AVATAR_FALLBACK}" alt="" onerror="onEngAvatarError(this)">@${escapeHtml(e.username)}</a></td>
+      <td class="col-account col-left"><a class="account-cell" href="https://x.com/${encodeURIComponent(e.username)}" target="_blank" rel="noopener"><img class="avatar" src="${avatarUrl(e.username)}" alt="" onerror="onEngAvatarError(this)">@${escapeHtml(e.username)}</a></td>
       <td>${e.relationship_score > 0 ? fmtNum(e.relationship_score) : "-"}</td>
       <td>${fmtNum(e.retweet_value)}</td>
       <td>${fmtNum(e.quote_value)}</td>
@@ -2679,13 +2680,6 @@ if (engagementTabButton) {
 // than UPDATE_ITEM_MAX_AGE_DAYS (counted from that commit date) age out
 // automatically, so nothing needs to be manually removed later.
 const UPDATE_ITEMS = [
-  {
-    id: "2026-08-25-zero-payout-retry",
-    date: "2026-08-25",
-    title: "Zero-payout campaigns retried.",
-    text: "If a campaign cycle ends without anyone actually getting paid, for example due to a brief edit or a temporary evidence gap, that result is no longer locked in for good. The validator retries it on the next cycle instead, so your submission still gets a fair shot once things settle.",
-    url: "https://github.com/bitcast-network/bitcast-x/commit/21379222d238302d1a0af74d253b3d8b26187d89",
-  },
   {
     id: "2026-08-23-sponsor-negativity-restored",
     date: "2026-08-23",
