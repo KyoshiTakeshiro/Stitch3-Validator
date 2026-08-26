@@ -2457,15 +2457,6 @@ fitModeTabs();
     grid.classList.add("values-tight");
   }
 
-  // JetBrains Mono loads with display=swap, so a cold page load can still be
-  // rendering .value in a fallback font when fitSummaryValues() first
-  // measures it. The fallback's narrower metrics can make text look like it
-  // fits when the real webfont, once it swaps in, no longer does -- re-check
-  // once fonts are actually ready so the shrink classes reflect real widths.
-  if (document.fonts && document.fonts.ready) {
-    document.fonts.ready.then(() => fitSummaryValues());
-  }
-
   function updateResultValues(data) {
     const fields = [
       ["eng-summary-avatar", el => { el.src = avatarUrl(data.handle); }],
@@ -2476,9 +2467,23 @@ fitModeTabs();
     ];
     const els = fields.map(([id]) => document.getElementById(id));
     els.forEach(el => el.classList.add("value-fade"));
-    setTimeout(() => {
+    setTimeout(async () => {
       fields.forEach(([id, apply]) => apply(document.getElementById(id)));
       els.forEach(el => el.classList.remove("value-fade"));
+      // JetBrains Mono loads with display=swap, so a visitor whose browser
+      // is still swapping the webfont in (slow network, cold cache -- the
+      // VPS's real visitors, not this dev machine's already-warm cache)
+      // can have fitSummaryValues() measure against the narrower fallback
+      // font here. A one-time document.fonts.ready listener at page load
+      // doesn't fix this: that promise typically resolves long before any
+      // result actually renders, so it fires once, uselessly, before the
+      // summary card even exists, and never again for later lookups.
+      // Awaiting it here, on every render, is what actually matters --
+      // it resolves instantly once fonts are already loaded (the common
+      // case), so this costs nothing when there's nothing to wait for.
+      if (document.fonts && document.fonts.ready) {
+        await document.fonts.ready;
+      }
       fitSummaryValues();
     }, 130);
   }
