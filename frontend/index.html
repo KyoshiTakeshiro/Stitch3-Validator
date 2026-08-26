@@ -209,14 +209,6 @@
   .disclaimer { font-size: 13.5px; color: var(--gray-500); }
   .disclaimer a { color: var(--gray-500); text-decoration: underline; text-decoration-color: var(--border-input); text-underline-offset: 2px; }
   .disclaimer a:hover { color: var(--gray-300); text-decoration-color: currentColor; }
-  .kicker-row { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-  .version-tag {
-    font-family: var(--font-mono);
-    font-size: 13px;
-    font-weight: 600;
-    letter-spacing: var(--tracking-label);
-    color: var(--gray-500);
-  }
 
   .theme-toggle {
     position: fixed;
@@ -782,16 +774,29 @@
   .site-footer a:hover { text-decoration: underline; }
   .powered-by-link { display: inline-flex; align-items: center; gap: 5px; }
   .powered-by-link svg { height: 13px; width: auto; }
+  .footer-meta-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    margin-top: 16px;
+  }
   .site-footer .footer-github-link {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    margin-top: 16px;
     color: var(--gray-500);
     transition: color 0.15s ease;
   }
   .site-footer .footer-github-link:hover {
     color: var(--gray-100);
+  }
+  .site-footer .version-tag {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: var(--tracking-label);
+    color: var(--gray-500);
   }
 
   .tiptao-trigger {
@@ -1154,10 +1159,7 @@
   <header class="site-header">
     <div class="header-logo" role="img" aria-label="Stitch3 Validator"></div>
     <div class="header-meta">
-      <span class="kicker-row">
-        <span class="kicker">Stitch3 Validator</span>
-        <span class="version-tag" id="version-tag" title="Validator logic version">v2.0</span>
-      </span>
+      <span class="kicker">Stitch3 Validator</span>
       <span class="disclaimer">Unofficial community tool, not affiliated with <a href="https://bitcast.network" target="_blank" rel="noopener">Bitcast</a> or <a href="https://stitch3.ai" target="_blank" rel="noopener">Stitch3</a></span>
     </div>
   </header>
@@ -1277,9 +1279,12 @@
   <footer class="site-footer">
     <p class="powered-by">Inference by <a href="https://chutes.ai" target="_blank" rel="noopener" class="powered-by-link"><svg width="62" height="41" viewBox="0 0 62 41" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M38.01 39.6943C37.1263 41.1364 35.2525 41.4057 34.0442 40.2642L28.6738 35.1904C27.4656 34.049 27.4843 32.0273 28.7133 30.9115L34.1258 25.9979C40.1431 20.5352 48.069 18.406 55.6129 20.2255L59.6853 21.2078C59.8306 21.2428 59.9654 21.3165 60.0771 21.422C60.6663 21.9787 60.3364 23.0194 59.552 23.078L59.465 23.0845C52.0153 23.6409 45.1812 27.9913 40.9759 34.8542L38.01 39.6943Z" fill="currentColor"></path><path d="M15.296 36.5912C14.1726 37.8368 12.2763 37.7221 11.2913 36.349L0.547139 21.3709C-0.432786 20.0048 -0.0547272 18.0273 1.34794 17.1822L22.7709 4.27482C29.6029 0.158495 37.7319 -0.277291 44.8086 3.0934L60.3492 10.4956C60.5897 10.6101 60.7997 10.7872 60.9599 11.0106C61.8149 12.2025 60.8991 13.9056 59.5058 13.7148L50.2478 12.4467C42.8554 11.4342 35.4143 14.2848 30.1165 20.1587L15.296 36.5912Z" fill="currentColor"></path></svg>Chutes</a> with Qwen3-32B for Bitcast-aligned tweet validation.</p>
     <p>Built by <a href="https://x.com/KyoshiTakeshiro" target="_blank" rel="noopener">Kyoshi Takeshiro</a>.<br><button type="button" class="tiptao-trigger" id="tiptao-trigger">Buy me a coffee</button> on <a href="https://www.tiptao.io" target="_blank" rel="noopener">TipTAO</a> ☕️</p>
-    <a href="https://github.com/KyoshiTakeshiro/Stitch3-Validator" target="_blank" rel="noopener" class="footer-github-link" aria-label="View source on GitHub">
-      <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
-    </a>
+    <div class="footer-meta-row">
+      <a href="https://github.com/KyoshiTakeshiro/Stitch3-Validator" target="_blank" rel="noopener" class="footer-github-link" aria-label="View source on GitHub">
+        <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+      </a>
+      <span class="version-tag" id="version-tag" title="Validator logic version">v2.0</span>
+    </div>
   </footer>
 </div>
 
@@ -2674,6 +2679,13 @@ if (engagementTabButton) {
 // than UPDATE_ITEM_MAX_AGE_DAYS (counted from that commit date) age out
 // automatically, so nothing needs to be manually removed later.
 const UPDATE_ITEMS = [
+  {
+    id: "2026-08-25-zero-payout-retry",
+    date: "2026-08-25",
+    title: "Zero-payout campaigns retried.",
+    text: "If a campaign cycle ends without anyone actually getting paid, for example due to a brief edit or a temporary evidence gap, that result is no longer locked in for good. The validator retries it on the next cycle instead, so your submission still gets a fair shot once things settle.",
+    url: "https://github.com/bitcast-network/bitcast-x/commit/21379222d238302d1a0af74d253b3d8b26187d89",
+  },
   {
     id: "2026-08-23-sponsor-negativity-restored",
     date: "2026-08-23",
