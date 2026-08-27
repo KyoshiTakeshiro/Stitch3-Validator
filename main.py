@@ -77,6 +77,19 @@ app.add_middleware(
 app.include_router(engagement_router, prefix="/api/engagement")
 
 
+async def _warm_engagement_cache_task() -> None:
+    # A bare asyncio.create_task(engagement_warm_cache()) used to leave any
+    # exception here to just vanish -- fire-and-forget tasks aren't awaited,
+    # so nothing ever surfaces the traceback (confirmed: this is the likely
+    # explanation for a real warm_avatars() run stopping partway through
+    # with no error visible anywhere). Wrapping it here means a failure at
+    # least lands in the real logs instead of disappearing silently.
+    try:
+        await engagement_warm_cache()
+    except Exception:
+        LOGGER.exception("engagement_warm_cache() failed during startup warm")
+
+
 @app.on_event("startup")
 async def _warm_engagement_cache_on_startup() -> None:
     # engagement.py's ecosystem-map cache has no TTL (see fetch_ecosystem_map),
@@ -88,7 +101,7 @@ async def _warm_engagement_cache_on_startup() -> None:
     # harmless since the normal request-time fetch is still the fallback.
     import asyncio
 
-    asyncio.create_task(engagement_warm_cache())
+    asyncio.create_task(_warm_engagement_cache_task())
 
 # /evaluate and /evaluate/stream are the only endpoints that spend real money
 # (each check is a Chutes API call against our own key) -- /briefs and the

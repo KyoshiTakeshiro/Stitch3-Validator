@@ -12,6 +12,7 @@ prediction_markets) -- same pool ids the Pre-Submission Check tool uses.
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import time
 from pathlib import Path
@@ -22,6 +23,8 @@ from fastapi import APIRouter, HTTPException, Request, Response
 
 from activity_log import hash_ip, log_event
 from legacy_briefs import get_cached_legacy_briefs
+
+LOGGER = logging.getLogger(__name__)
 
 BITCAST_API_BASE = "https://bitcast-api.bitcast.network"
 MANIFEST_URL = f"{BITCAST_API_BASE}/api/v2/public/x/campaign-manifest-v4"
@@ -434,7 +437,8 @@ async def warm_avatars() -> dict:
     stats = {"considered": 0, "already_fresh": 0, "fetched": 0, "failed": 0, "budget_exhausted": False}
     try:
         manifest = await fetch_manifest()
-    except HTTPException:
+    except HTTPException as exc:
+        LOGGER.warning("warm_avatars: manifest unavailable, aborting this run: %s", exc)
         return stats
 
     ordered_usernames: list[str] = []
@@ -450,7 +454,8 @@ async def warm_avatars() -> dict:
         try:
             maps = await ecosystem_maps_for_campaign(manifest, campaigns[0], ecosystem_id)
             considered, _ = considered_accounts_for_campaign(maps)
-        except (HTTPException, ValueError):
+        except (HTTPException, ValueError) as exc:
+            LOGGER.warning("warm_avatars: skipping ecosystem=%s, no map data: %s", ecosystem_id, exc)
             continue
         ranked = sorted(considered.items(), key=lambda kv: kv[1]["influence"], reverse=True)
         for _, entry in ranked:
@@ -471,7 +476,18 @@ async def warm_avatars() -> dict:
             break
         try:
             content, content_type = await _fetch_avatar_live(username)
-        except (httpx.HTTPError, ValueError):
+        except Exception:
+            # Deliberately broad, not just (httpx.HTTPError, ValueError) --
+            # one account's unexpected failure (a malformed URL from an
+            # unusual username, some other httpx edge case, anything) must
+            # never silently kill the rest of this run. This used to be
+            # the narrower pair only, which is the likely explanation for
+            # a real run once stopping partway through with no
+            # budget_exhausted and no visible error: this is a
+            # fire-and-forget asyncio task (see warm_cache/main.py's
+            # startup hook), so an uncaught exception here just vanishes
+            # instead of showing up anywhere.
+            LOGGER.exception("warm_avatars: live fetch failed for username=%s", username)
             stats["failed"] += 1
             continue
         _write_avatar_disk(username, content, content_type, time.time())
