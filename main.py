@@ -717,7 +717,7 @@ def admin_panel(
     {avatar_toast_html}
     <div class="card">
       <h2>Engagement Value avatars</h2>
-      <div class="count">Fetches up to 20 new accounts' avatars to disk each run, highest-influence first, until every considered account eventually has one (see engagement.py). No automatic schedule; run this manually whenever coverage needs a top-up.</div>
+      <div class="count">Fetches up to the daily unavatar.io budget worth of new accounts' avatars to disk each run (50/day with UNAVATAR_API_KEY set, 20/day without), highest-influence first, until every considered account eventually has one (see engagement.py). No automatic schedule; run this manually whenever coverage needs a top-up.</div>
       <form method="post" action="/admin/refresh-avatars">
         <button type="submit" class="admin-btn">Refresh avatars</button>
       </form>

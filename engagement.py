@@ -12,6 +12,7 @@ prediction_markets) -- same pool ids the Pre-Submission Check tool uses.
 import asyncio
 import hashlib
 import json
+import os
 import time
 from pathlib import Path
 from typing import Optional
@@ -40,7 +41,7 @@ AVATAR_TTL = 6 * 3600
 
 # warm_avatars() spends its daily budget working through ecosystems in this
 # order, tao (Bittensor) first by request -- since the budget is shared and
-# small (AVATAR_DAILY_FETCH_BUDGET), an earlier ecosystem's considered list
+# small (see _avatar_daily_budget below), an earlier ecosystem's considered list
 # is exhausted before a later one gets any budget at all, not just given a
 # head start. ALLOWED_ECOSYSTEMS itself stays a set (only used for
 # membership checks elsewhere) so this ordering lives in exactly one place.
@@ -51,8 +52,8 @@ AVATAR_WARM_ECOSYSTEM_ORDER = ("tao", "hyperliquid", "prediction_markets")
 AVATAR_STORE_DIR = Path(__file__).parent / "avatar_cache"
 AVATAR_REFRESH_SECONDS = 7 * 24 * 3600  # re-fetch a stored avatar at most weekly
 
-# unavatar.io's anonymous tier turned out to be a DAILY quota, not just a
-# burst/rate limit (confirmed live: a live call now returns
+# unavatar.io's free tiers are DAILY quotas, not just burst/rate limits
+# (confirmed live: an over-quota call returns
 # {"code": "ERATE", "message": "Daily anonymous rate limit reached..."}).
 # Spreading requests out over time doesn't help with a daily cap -- without
 # this budget, one warm_avatars() pass across a full considered-accounts
@@ -66,11 +67,33 @@ AVATAR_REFRESH_SECONDS = 7 * 24 * 3600  # re-fetch a stored avatar at most weekl
 # coverage grows by roughly this many genuinely new accounts each time
 # it's triggered (once daily at most makes sense, since the budget resets
 # on a UTC day boundary) until eventually every account has a stored
-# avatar. 20/day is a conservative guess pending real data on the
-# anonymous tier's actual ceiling; a registered unavatar API key
-# (unavatar.io/checkout, 50/day on their free tier) would raise this a lot
-# and is the real fix if coverage needs to grow faster than this.
-AVATAR_DAILY_FETCH_BUDGET = 20
+# avatar.
+#
+# With a registered UNAVATAR_API_KEY (see _unavatar_api_key below), 50
+# origin requests/day are included free per unavatar's own pricing docs
+# (unavatar.io/docs#pricing); anything past that is metered billing, which
+# we deliberately never want to risk incurring without being asked to, so
+# the budget is capped at exactly that free-tier ceiling -- never higher,
+# even though unavatar itself would technically allow more (for a price).
+# Without a key (e.g. local dev), stay well under the anonymous tier's own
+# 25/day per-IP ceiling. _try_consume_avatar_budget's `>=` check makes
+# this a hard cap either way, never a soft/approximate one.
+AVATAR_DAILY_FETCH_BUDGET_WITH_KEY = 50
+AVATAR_DAILY_FETCH_BUDGET_ANONYMOUS = 20
+
+
+def _unavatar_api_key() -> Optional[str]:
+    # Read lazily (not a module-level constant) -- engagement.py is
+    # imported by main.py before main.py's own load_dotenv() call runs,
+    # so a value captured at import time would always see an unset
+    # environment and silently miss the key.
+    return os.getenv("UNAVATAR_API_KEY")
+
+
+def _avatar_daily_budget() -> int:
+    return AVATAR_DAILY_FETCH_BUDGET_WITH_KEY if _unavatar_api_key() else AVATAR_DAILY_FETCH_BUDGET_ANONYMOUS
+
+
 AVATAR_BUDGET_FILE = Path(__file__).parent / "avatar_fetch_budget.json"
 
 router = APIRouter()
@@ -110,7 +133,7 @@ async def _try_consume_avatar_budget() -> bool:
             state = {}
         if state.get("date") != today:
             state = {"date": today, "used": 0}
-        if state["used"] >= AVATAR_DAILY_FETCH_BUDGET:
+        if state["used"] >= _avatar_daily_budget():
             return False
         state["used"] += 1
         try:
@@ -151,8 +174,10 @@ def _write_avatar_disk(username: str, content: bytes, content_type: str, fetched
 
 
 async def _fetch_avatar_live(username: str) -> tuple[bytes, str]:
+    api_key = _unavatar_api_key()
+    headers = {"x-api-key": api_key} if api_key else {}
     async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.get(f"{AVATAR_BASE_URL}/{username}")
+        resp = await client.get(f"{AVATAR_BASE_URL}/{username}", headers=headers)
         resp.raise_for_status()
         content_type = resp.headers.get("content-type", "")
         if not content_type.startswith("image/"):
@@ -168,8 +193,8 @@ async def _get_avatar(username: str) -> tuple[bytes, str]:
     warm_avatars() below works through every considered account,
     highest-influence first, so the accounts real visitors are most likely
     to look at tend to already be on disk before they ever ask for it. A
-    live fetch also costs one unit of
-    AVATAR_DAILY_FETCH_BUDGET -- once that's spent for the day, this falls
+    live fetch also costs one unit of today's daily budget (see
+    _avatar_daily_budget) -- once that's spent for the day, this falls
     straight back to a stale copy (or a clean miss) without attempting the
     request at all, since unavatar.io's daily quota means it would just
     fail anyway."""
@@ -394,8 +419,8 @@ async def warm_avatars() -> dict:
     stale, see AVATAR_REFRESH_SECONDS). Ecosystems are processed in
     AVATAR_WARM_ECOSYSTEM_ORDER (tao/Bittensor first, by request), and
     within an ecosystem, highest-influence account first. The only thing
-    that actually limits how much happens in one call is
-    AVATAR_DAILY_FETCH_BUDGET: once that's spent, this stops and picks up
+    that actually limits how much happens in one call is the daily budget
+    (see _avatar_daily_budget): once that's spent, this stops and picks up
     again from wherever it left off next time it's called (already-cached
     accounts are skipped instantly, so re-running doesn't redo work). Since
     the budget is small and shared across ecosystems, an earlier ecosystem
