@@ -1852,7 +1852,7 @@ function renderResult(data) {
   let disclaimerHtml = "";
   if (data.meets_brief && brief && brief.tag && !tweetInput.value.toLowerCase().includes(brief.tag.toLowerCase())) {
     const escapedTag = brief.tag.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    disclaimerHtml = `<p class="verdict-disclaimer">Disclaimer: this brief requires tagging <strong>${escapedTag}</strong>. Without it, the real validator may not discover your tweet even if it passes here.</p>`;
+    disclaimerHtml = `<p class="verdict-disclaimer">Disclaimer: this brief requires tagging <strong>${escapedTag}</strong>. Without it, the real validator may not pass your tweet.</p>`;
   }
 
   let html = `<div class="verdict ${verdictClass}"><div class="verdict-row"><span class="verdict-label">${verdictIcon}${verdictText}${countHtml}</span></div>${disclaimerHtml}</div>`;
