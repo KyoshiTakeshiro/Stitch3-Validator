@@ -996,6 +996,16 @@
     display: inline-block;
     max-width: 100%;
     white-space: nowrap;
+    /* Safety net, not decoration: without overflow:hidden, text wider than
+       the box (a late webfont swap that fitSummaryValues' JS shrink logic
+       hasn't caught up to yet -- confirmed live, repeatedly, that JS-side
+       timing here is genuinely unreliable) paints past the box edge with
+       no gradient behind it (background-clip:text + color:transparent
+       below), rendering as an invisible cut-off character instead of a
+       readable one. This guarantees a visible "…" instead, regardless of
+       whatever the JS shrink logic does or doesn't catch in time. */
+    overflow: hidden;
+    text-overflow: ellipsis;
     font-family: var(--font-mono);
     font-weight: 700;
     font-size: 26px;
@@ -2467,24 +2477,28 @@ fitModeTabs();
     ];
     const els = fields.map(([id]) => document.getElementById(id));
     els.forEach(el => el.classList.add("value-fade"));
-    setTimeout(async () => {
+    setTimeout(() => {
       fields.forEach(([id, apply]) => apply(document.getElementById(id)));
       els.forEach(el => el.classList.remove("value-fade"));
+      fitSummaryValues();
       // JetBrains Mono loads with display=swap, so a visitor whose browser
       // is still swapping the webfont in (slow network, cold cache -- the
       // VPS's real visitors, not this dev machine's already-warm cache)
-      // can have fitSummaryValues() measure against the narrower fallback
-      // font here. A one-time document.fonts.ready listener at page load
-      // doesn't fix this: that promise typically resolves long before any
-      // result actually renders, so it fires once, uselessly, before the
-      // summary card even exists, and never again for later lookups.
-      // Awaiting it here, on every render, is what actually matters --
-      // it resolves instantly once fonts are already loaded (the common
-      // case), so this costs nothing when there's nothing to wait for.
-      if (document.fonts && document.fonts.ready) {
-        await document.fonts.ready;
-      }
-      fitSummaryValues();
+      // can have this first fitSummaryValues() measure against the
+      // narrower fallback font. Chasing the exact moment the swap
+      // actually repaints turned out to be genuinely unreliable here --
+      // tried document.fonts.ready (resolves before the font is even
+      // requested), document.fonts.load() + requestAnimationFrame (a
+      // resolved load() promise doesn't mean the browser has repainted
+      // yet either, and in testing the rAF promise itself sometimes never
+      // settled), and a ResizeObserver-based re-measure (its own
+      // classList toggle re-triggered itself, looping forever). Rather
+      // than keep chasing this, a plain second check after a fixed delay
+      // catches the common late-swap case without any of those fragile
+      // mechanisms, and .summary-stat .value's own overflow:hidden +
+      // text-overflow:ellipsis (see its CSS) is what actually guarantees
+      // no invisible clipping regardless of whether this catches it.
+      setTimeout(fitSummaryValues, 400);
     }, 130);
   }
 
