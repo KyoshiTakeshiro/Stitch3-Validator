@@ -2688,74 +2688,14 @@ if (engagementTabButton) {
   engagementTabButton.addEventListener("focus", () => window.initEngagementPanel(), { once: true });
 }
 
-// Running list of upstream Bitcast-validator-behavior notes worth surfacing to
-// miners. Add new entries here (e.g. from the daily fidelity-check routine's
-// draft banner snippets) -- each needs a stable unique id, the source
-// commit's own authored date on GitHub (YYYY-MM-DD -- NOT the date this item
-// was added to the banner, which can lag behind by a day or more depending
-// on when the fidelity check runs and when someone reviews the draft), a
-// short bold title, a plain-English sentence or two, and a url linking the
-// title to that same source commit on bitcast-network/bitcast-x. Items older
-// than UPDATE_ITEM_MAX_AGE_DAYS (counted from that commit date) age out
-// automatically, so nothing needs to be manually removed later.
-const UPDATE_ITEMS = [
-  {
-    id: "2026-08-28-featured-tweet-pin",
-    date: "2026-08-28",
-    title: "Featured pick locked early.",
-    text: "The tweet chosen for the featured bonus is now locked in about a day before the campaign closes, instead of possibly changing all the way to final scoring. A late view spike will no longer change who ends up featured.",
-    url: "https://github.com/bitcast-network/bitcast-x/commit/db164014df3bab30d12dc09ab6ed92c0f5002c51",
-  },
-  {
-    id: "2026-08-23-sponsor-negativity-restored",
-    date: "2026-08-23",
-    title: "Sponsor negativity rule restored.",
-    text: "Criticizing the sponsor is back to being an automatic fail by default, same as it's always been, undoing a brief window where it wasn't. A campaign creator can still choose to allow critical posts, but has to set that up explicitly when the campaign is created.",
-    url: "https://github.com/bitcast-network/bitcast-x/commit/edae8b5e4cb6c5bc896080a8c9ac0e14c9378421",
-  },
-  {
-    id: "2026-08-14-manual-tweet-submission",
-    date: "2026-08-14",
-    title: "Manual tweet submission on some campaigns.",
-    text: "Some campaigns no longer auto-detect your posts by scanning X. After publishing, you need to submit your tweet yourself (its link or ID) through Stitch3 for it to be counted and ranked.",
-    url: "https://github.com/bitcast-network/bitcast-x/commit/41552049b61f10fc7117e7c4c749aa7b597ff501",
-  },
-  {
-    id: "2026-08-18-campaign-eligibility-rank-overlap",
-    date: "2026-08-18",
-    title: "Campaign eligibility widened.",
-    text: "Your tweet now counts toward a campaign if you ranked in the top members list at any point during the campaign, not just at the exact moment you posted. A rank dip right after posting should no longer disqualify an otherwise-compliant tweet.",
-    url: "https://github.com/bitcast-network/bitcast-x/commit/ec4aed79fb1699c7dca06bfe1ab2833cadce57b7",
-  },
-  {
-    id: "2026-08-18-honest-reviews",
-    date: "2026-08-17",
-    title: "Honest reviews now allowed.",
-    text: "Some campaigns ask for genuine product/service reviews. Previously, sounding negative or critical could fail the check. Now sentiment doesn't matter. A real, substantive review passes even if it's critical, as long as it's actually about the product.",
-    url: "https://github.com/bitcast-network/bitcast-x/commit/afa0e749c39a71a872ef89cd6bdff2ce4d1b3dea",
-  },
-  {
-    id: "2026-08-18-rank-cutoffs",
-    date: "2026-08-17",
-    title: "Rank cutoffs on some campaigns.",
-    text: "Certain campaigns now cap how many creators can earn from them. If a campaign sets a member limit, only the highest-ranked creators (by influence) within that cap get counted, even if your tweet fully meets the brief.",
-    url: "https://github.com/bitcast-network/bitcast-x/commit/65f56004a0f14f9fa3e49bf8ff4859b66ff660f7",
-  },
-  {
-    id: "2026-08-18-deferred-scoring",
-    date: "2026-08-17",
-    title: "One bad tweet won't sink the batch.",
-    text: "If the validator hits a temporary hiccup checking one tweet during final scoring, it now sets that tweet aside and keeps going, instead of risking everyone else's scoring in the same run.",
-    url: "https://github.com/bitcast-network/bitcast-x/commit/c15f8a0c2b86a59889665e08f85c2503143249c6",
-  },
-  {
-    id: "2026-09-01-direct-submission-grace",
-    date: "2026-09-01",
-    title: "Direct submission grace window",
-    text: "Exclusive and direct campaigns now accept a tweet you already posted for a short window after new posts stop being accepted, as long as you were eligible when you posted it and the submission confirms before scoring locks in. This does not give you more time to post something new, only more time to submit one you already have.",
-    url: "https://github.com/bitcast-network/bitcast-x/commit/69ef77dcd06a57cf418120cbbb6990e23d370381",
-  },
-];
+// Bitcast-validator-behavior banner items -- previously a hardcoded array
+// here (requiring a code edit + git commit + deploy per item), now fetched
+// from the backend (GET /update-items, backed by update_items.py) so they
+// can be published straight from /admin instead. Each item still needs a
+// stable unique id, a date (YYYY-MM-DD), a short title, a plain-English
+// sentence or two, and optionally a source url. Items older than
+// UPDATE_ITEM_MAX_AGE_DAYS (counted from that date) age out automatically.
+let UPDATE_ITEMS = [];
 const UPDATE_ITEM_MAX_AGE_DAYS = 7;
 
 function initUpdateBanner() {
@@ -2857,7 +2797,11 @@ function initUpdateBanner() {
   });
 }
 
-initUpdateBanner();
+fetch("/update-items")
+  .then(r => r.ok ? r.json() : [])
+  .then(items => { UPDATE_ITEMS = items; })
+  .catch(() => { UPDATE_ITEMS = []; })
+  .finally(initUpdateBanner);
 </script>
 </body>
 </html>

@@ -33,6 +33,9 @@ from engagement import warm_avatars as engagement_warm_avatars
 from engagement import warm_cache as engagement_warm_cache
 from legacy_briefs import get_cached_legacy_briefs
 from prompts import generate_brief_evaluation_prompt
+from update_items import add_item as add_update_item
+from update_items import delete_item as delete_update_item
+from update_items import list_items as list_update_items
 
 load_dotenv()
 
@@ -482,6 +485,16 @@ def get_stats():
     return _load_stats_public()
 
 
+@app.get("/update-items")
+def get_update_items():
+    """Backs the "Bitcast Protocol Updates" banner on the public site (see
+    update_items.py). Public, unauthenticated, read-only -- the frontend's
+    own aging/sorting/seen-tracking logic (initUpdateBanner() in
+    frontend/index.html) still runs client-side against whatever this
+    returns."""
+    return list_update_items()
+
+
 def _fmt_ts(ts: float) -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(ts))
 
@@ -506,6 +519,28 @@ def _admin_rank_rows(counts: list[tuple[str, int]]) -> str:
     )
 
 
+def _admin_update_item_rows(items: list[dict]) -> str:
+    if not items:
+        return '<tr class="empty-row"><td colspan="5">No banner items yet.</td></tr>'
+    rows = []
+    for item in sorted(items, key=lambda i: i.get("date", ""), reverse=True):
+        title_html = (
+            f'<a href="{html.escape(str(item.get("url", "")))}" target="_blank" rel="noopener">{html.escape(str(item.get("title", "")))}</a>'
+            if item.get("url")
+            else html.escape(str(item.get("title", "")))
+        )
+        rows.append(
+            f"<tr><td class=\"col-time\">{html.escape(str(item.get('date', '')))}</td>"
+            f"<td class=\"col-mono col-wrap\">{title_html}</td>"
+            f"<td class=\"col-wrap\">{html.escape(str(item.get('text', '')))}</td>"
+            f"<td class=\"col-ip\">{html.escape(str(item.get('id', '')))}</td>"
+            f"<td><form method=\"post\" action=\"/admin/update-items/{html.escape(str(item.get('id', '')))}/delete\" "
+            f"onsubmit=\"return confirm('Delete this banner item?')\">"
+            f"<button type=\"submit\" class=\"admin-btn admin-btn-danger\">Delete</button></form></td></tr>"
+        )
+    return "".join(rows)
+
+
 @app.post("/admin/refresh-avatars", dependencies=[Depends(require_admin)])
 async def admin_refresh_avatars():
     """Manually (re-)warms the Engagement Value avatar disk store -- see
@@ -517,6 +552,28 @@ async def admin_refresh_avatars():
     stats = await engagement_warm_avatars()
     params = "&".join(f"avatar_{k}={v}" for k, v in stats.items())
     return RedirectResponse(url=f"/admin?avatar_refreshed=1&{params}", status_code=303)
+
+
+@app.post("/admin/update-items", dependencies=[Depends(require_admin)])
+async def admin_add_update_item(request: Request):
+    """Publishes a new "Bitcast Protocol Updates" banner item straight from
+    /admin -- no code edit, git commit, or deploy needed (see update_items.py
+    for why this replaced the old hardcoded JS array). A plain HTML form
+    post, not JSON, to match this page's no-client-JS admin pattern."""
+    form = await request.form()
+    title = str(form.get("title", "")).strip()
+    text = str(form.get("text", "")).strip()
+    url = str(form.get("url", "")).strip()
+    date = str(form.get("date", "")).strip()
+    if title and text:
+        add_update_item(title=title, text=text, url=url, date=date)
+    return RedirectResponse(url="/admin#update-items", status_code=303)
+
+
+@app.post("/admin/update-items/{item_id}/delete", dependencies=[Depends(require_admin)])
+async def admin_delete_update_item(item_id: str):
+    delete_update_item(item_id)
+    return RedirectResponse(url="/admin#update-items", status_code=303)
 
 
 @app.get("/admin", response_class=HTMLResponse, dependencies=[Depends(require_admin)])
@@ -542,6 +599,8 @@ def admin_panel(
             f"{avatar_already_fresh} already fresh, {avatar_failed} failed, "
             f"out of {avatar_considered} considered accounts checked.{exhausted_note}</div>"
         )
+
+    update_item_rows = _admin_update_item_rows(list_update_items())
 
     events = read_events(limit=500)
     lookups = [e for e in events if e.get("type") == "engagement_lookup"]
@@ -711,11 +770,30 @@ def admin_panel(
     background: var(--gradient-brand); color: #050507; cursor: pointer;
   }}
   .admin-btn:hover {{ filter: brightness(1.05); }}
+  .admin-btn-danger {{
+    background: none; color: var(--red); border: 1px solid #f8717159;
+    padding: 5px 10px; font-size: 12px;
+  }}
+  .admin-btn-danger:hover {{ filter: none; background: #f8717114; }}
   .admin-toast {{
     font-size: 13px; color: var(--gray-300); background: var(--black-2);
     border: 1px solid var(--border-card); border-radius: var(--radius-control);
     padding: 12px 16px; margin-bottom: 24px;
   }}
+  td.col-wrap {{ white-space: normal; max-width: 420px; }}
+  .admin-form {{ display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }}
+  .admin-form label {{
+    font-family: var(--font-mono); font-size: 10.5px; letter-spacing: var(--tracking-label);
+    text-transform: uppercase; color: var(--gray-500); display: block; margin-bottom: 5px;
+  }}
+  .admin-form input, .admin-form textarea {{
+    width: 100%; background: var(--black-2); border: 1px solid var(--border-input);
+    border-radius: var(--radius-control); color: var(--gray-100); font-family: var(--font-body);
+    font-size: 13px; padding: 9px 11px; box-sizing: border-box;
+  }}
+  .admin-form textarea {{ resize: vertical; min-height: 70px; font-family: var(--font-body); }}
+  .admin-form-row {{ display: flex; gap: 12px; flex-wrap: wrap; }}
+  .admin-form-row > div {{ flex: 1; min-width: 160px; }}
 </style></head>
 <body>
   <div class="page">
@@ -734,6 +812,38 @@ def admin_panel(
       <form method="post" action="/admin/refresh-avatars">
         <button type="submit" class="admin-btn">Refresh avatars</button>
       </form>
+    </div>
+
+    <div class="card" id="update-items">
+      <h2>Bitcast Protocol Updates banner</h2>
+      <div class="count">Published straight from here -- no code edit or deploy needed. Shown on the public site's update pill, newest first, and ages out after 7 days.</div>
+      <form class="admin-form" method="post" action="/admin/update-items">
+        <div class="admin-form-row">
+          <div>
+            <label for="update-item-title">Title</label>
+            <input id="update-item-title" name="title" type="text" required maxlength="200" placeholder="Short headline">
+          </div>
+          <div>
+            <label for="update-item-date">Date (optional, defaults to today, UTC)</label>
+            <input id="update-item-date" name="date" type="date">
+          </div>
+        </div>
+        <div>
+          <label for="update-item-text">Text</label>
+          <textarea id="update-item-text" name="text" required maxlength="600" placeholder="One or two plain-English sentences."></textarea>
+        </div>
+        <div>
+          <label for="update-item-url">Source URL (optional -- makes the title a link)</label>
+          <input id="update-item-url" name="url" type="url" placeholder="https://github.com/bitcast-network/bitcast-x/commit/...">
+        </div>
+        <div><button type="submit" class="admin-btn">Publish banner item</button></div>
+      </form>
+      <div class="table-wrap" style="margin-top: 20px;">
+        <table>
+          <thead><tr><th>Date</th><th>Title</th><th>Text</th><th>ID</th><th></th></tr></thead>
+          <tbody>{update_item_rows}</tbody>
+        </table>
+      </div>
     </div>
 
     <div class="card">

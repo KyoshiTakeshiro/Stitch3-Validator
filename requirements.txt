@@ -3,3 +3,4 @@ uvicorn[standard]
 requests
 httpx
 python-dotenv
+python-multipart
