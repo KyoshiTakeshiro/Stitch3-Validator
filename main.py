@@ -683,17 +683,27 @@ ADMIN_STYLE = """
     from { opacity: 0; transform: translateY(12px); }
     to { opacity: 1; transform: translateY(0); }
   }
-  .admin-header { display: flex; align-items: center; gap: 14px; margin-bottom: 32px; }
-  .admin-logo {
-    height: 34px; width: 48px; flex-shrink: 0;
+  /* Matches the public site's own header exactly (frontend/index.html's
+     .site-header/.header-logo/.header-meta/.kicker/.disclaimer), so the
+     admin panel reads as the same product rather than a bare utility page
+     bolted onto the side. Which section this is lives in the nav bar and
+     <title>, not a separate "Admin" label here. */
+  .site-header { margin-bottom: 32px; display: flex; flex-direction: column; }
+  .header-logo {
+    height: 72px; width: 102px; margin-bottom: 40px;
+    display: block; align-self: flex-start;
     background-color: var(--gray-100);
     -webkit-mask-image: url("/assets/logo-icon-only.png");
     mask-image: url("/assets/logo-icon-only.png");
     -webkit-mask-size: contain; mask-size: contain;
     -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+    -webkit-mask-position: left center; mask-position: left center;
   }
-  .kicker { font-family: var(--font-display); font-weight: 700; font-size: 22px; color: var(--gray-100); letter-spacing: -0.01em; display: block; }
-  .disclaimer { font-size: 12.5px; color: var(--gray-500); }
+  .header-meta { display: flex; flex-direction: column; gap: 2px; }
+  .kicker { font-family: var(--font-display); font-weight: 700; font-size: 40px; color: var(--gray-100); letter-spacing: -0.01em; }
+  .disclaimer { font-size: 13.5px; color: var(--gray-500); }
+  .disclaimer a { color: var(--gray-500); text-decoration: underline; text-decoration-color: var(--border-input); text-underline-offset: 2px; }
+  .disclaimer a:hover { color: var(--gray-300); text-decoration-color: currentColor; }
   .card {
     position: relative;
     background: radial-gradient(ellipse 120% 100% at 50% 0%, #b882ff14 0%, transparent 60%), var(--black-1);
@@ -829,13 +839,13 @@ def _admin_shell(active_slug: str, body_html: str) -> str:
     <div class="admin-nav-inner">{nav_links}</div>
   </nav>
   <div class="page">
-    <div class="admin-header">
-      <div class="admin-logo" role="img" aria-label="Stitch3 Validator"></div>
-      <div>
-        <span class="kicker">Admin</span>
-        <span class="disclaimer">Owner-only usage log. Not linked from the public site.</span>
+    <header class="site-header">
+      <div class="header-logo" role="img" aria-label="Stitch3 Validator"></div>
+      <div class="header-meta">
+        <span class="kicker">Stitch3 Validator</span>
+        <span class="disclaimer">Unofficial community tool, not affiliated with <a href="https://bitcast.network" target="_blank" rel="noopener">Bitcast</a> or <a href="https://stitch3.ai" target="_blank" rel="noopener">Stitch3</a></span>
       </div>
-    </div>
+    </header>
     {body_html}
   </div>
 </body></html>"""
