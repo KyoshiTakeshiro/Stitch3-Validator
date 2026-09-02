@@ -551,7 +551,7 @@ async def admin_refresh_avatars():
     happened without any client-side JS."""
     stats = await engagement_warm_avatars()
     params = "&".join(f"avatar_{k}={v}" for k, v in stats.items())
-    return RedirectResponse(url=f"/admin?avatar_refreshed=1&{params}", status_code=303)
+    return RedirectResponse(url=f"/admin/avatars?avatar_refreshed=1&{params}", status_code=303)
 
 
 @app.post("/admin/update-items", dependencies=[Depends(require_admin)])
@@ -567,13 +567,13 @@ async def admin_add_update_item(request: Request):
     date = str(form.get("date", "")).strip()
     if title and text:
         add_update_item(title=title, text=text, url=url, date=date)
-    return RedirectResponse(url="/admin#update-items", status_code=303)
+    return RedirectResponse(url="/admin/updates", status_code=303)
 
 
 @app.post("/admin/update-items/{item_id}/delete", dependencies=[Depends(require_admin)])
 async def admin_delete_update_item(item_id: str):
     delete_update_item(item_id)
-    return RedirectResponse(url="/admin#update-items", status_code=303)
+    return RedirectResponse(url="/admin/updates", status_code=303)
 
 
 ADMIN_EVENTS_READ_LIMIT = 2000
@@ -590,108 +590,39 @@ def _paginate(items: list, page: int, page_size: int = ADMIN_PAGE_SIZE) -> tuple
     return items[start:start + page_size], page, total_pages
 
 
-def _admin_pager_html(section: str, page: int, total_pages: int, other_params: str) -> str:
+def _admin_pager_html(base_path: str, page: int, total_pages: int) -> str:
+    """Each section now has its own URL (see ADMIN_SECTIONS/_admin_shell), so
+    a pager only ever needs its own page number -- no other section's page
+    to preserve alongside it, unlike the old single-page-with-anchors
+    layout."""
     if total_pages <= 1:
         return ""
     prev_html = (
-        f'<a class="admin-pager-btn" href="?{section}_page={page - 1}{other_params}#{section}">← Prev</a>'
+        f'<a class="admin-pager-btn" href="{base_path}?page={page - 1}">← Prev</a>'
         if page > 1 else '<span class="admin-pager-btn admin-pager-btn-disabled">← Prev</span>'
     )
     next_html = (
-        f'<a class="admin-pager-btn" href="?{section}_page={page + 1}{other_params}#{section}">Next →</a>'
+        f'<a class="admin-pager-btn" href="{base_path}?page={page + 1}">Next →</a>'
         if page < total_pages else '<span class="admin-pager-btn admin-pager-btn-disabled">Next →</span>'
     )
     return f'<div class="admin-pager">{prev_html}<span class="admin-pager-status">Page {page} of {total_pages}</span>{next_html}</div>'
 
 
-@app.get("/admin", response_class=HTMLResponse, dependencies=[Depends(require_admin)])
-def admin_panel(
-    avatar_refreshed: bool = False,
-    avatar_considered: int = 0,
-    avatar_already_fresh: int = 0,
-    avatar_fetched: int = 0,
-    avatar_failed: int = 0,
-    avatar_budget_exhausted: bool = False,
-    lookups_page: int = 1,
-    checks_page: int = 1,
-):
-    """Owner-only view of raw usage: every engagement-value handle lookup
-    and every tweet check, newest first. Gated by HTTP Basic Auth
-    (require_admin) -- not linked from anywhere in the public UI. Styled to
-    match the public site's own design tokens (frontend/index.html's :root
-    block) rather than a bare utility page, since this is still a page the
-    owner will look at regularly.
+# (slug, nav label) -- drives both the nav bar (every page shows all of
+# these, with the current one highlighted) and each section's own route
+# path (/admin/{slug}). Order here is the nav's left-to-right order.
+ADMIN_SECTIONS = [
+    ("avatars", "Avatars"),
+    ("updates", "Banner Items"),
+    ("ecosystem", "Ecosystem"),
+    ("top-handles", "Top Handles"),
+    ("top-campaigns", "Top Campaigns"),
+    ("lookups", "Engagement Lookups"),
+    ("checks", "Tweet Checks"),
+]
 
-    The two raw-log tables (lookups/checks) are paginated independently via
-    ?lookups_page=N / ?checks_page=N query params -- plain GET links, no
-    client JS, matching this page's existing form/redirect-only pattern."""
-    avatar_toast_html = ""
-    if avatar_refreshed:
-        exhausted_note = " Daily fetch budget ran out partway through." if avatar_budget_exhausted else ""
-        avatar_toast_html = (
-            f'<div class="admin-toast">Avatar refresh: <strong>{avatar_fetched}</strong> fetched, '
-            f"{avatar_already_fresh} already fresh, {avatar_failed} failed, "
-            f"out of {avatar_considered} considered accounts checked.{exhausted_note}</div>"
-        )
-
-    update_item_rows = _admin_update_item_rows(list_update_items())
-
-    # Read a wider window than either table paginates through -- lookups and
-    # checks share one combined event log, so a small limit here could let
-    # one event type's older pages silently run dry sooner than the other's
-    # (e.g. a "checks page 3" that doesn't exist purely because 2000 events'
-    # worth of the *other* type crowded it out of the read, not because 3
-    # pages' worth of checks doesn't exist).
-    events = read_events(limit=ADMIN_EVENTS_READ_LIMIT)
-    lookups = [e for e in events if e.get("type") == "engagement_lookup"]
-    checks = [e for e in events if e.get("type") == "tweet_check"]
-
-    top_handles = Counter(f"@{e['handle']}" for e in lookups if e.get("handle")).most_common(10)
-    top_campaigns = Counter(e["brief_id"] for e in checks if e.get("brief_id")).most_common(10)
-
-    ecosystem_counts = Counter(e["ecosystem_id"] for e in lookups if e.get("ecosystem_id"))
-    ecosystem_total = sum(ecosystem_counts.values())
-    ecosystem_rows = "".join(
-        f"<tr><td class=\"col-mono\">{html.escape(ADMIN_POOL_LABELS.get(eco, eco))}</td>"
-        f"<td class=\"col-count\">{count}</td>"
-        f"<td class=\"col-count\">{round(count / ecosystem_total * 100)}%</td></tr>"
-        for eco, count in ecosystem_counts.most_common()
-    ) or '<tr class="empty-row"><td colspan="3">No lookups logged yet.</td></tr>'
-
-    lookups_page_items, lookups_page, lookups_total_pages = _paginate(lookups, lookups_page)
-    checks_page_items, checks_page, checks_total_pages = _paginate(checks, checks_page)
-
-    lookup_rows = "".join(
-        f"<tr><td class=\"col-time\">{html.escape(_fmt_ts(e.get('ts', 0)))}</td>"
-        f"<td class=\"col-mono\">@{html.escape(str(e.get('handle', '')))}</td>"
-        f"<td class=\"col-mono\">{html.escape(str(e.get('campaign_id', '')))}</td>"
-        f"<td>{html.escape(str(e.get('ecosystem_id', '')))}</td>"
-        f"<td>{_admin_badge(bool(e.get('found')), 'Found', 'Not found')}</td>"
-        f"<td class=\"col-ip\">{html.escape(str(e.get('ip_hash', ''))[:12])}</td></tr>"
-        for e in lookups_page_items
-    )
-    check_rows = "".join(
-        f"<tr><td class=\"col-time\">{html.escape(_fmt_ts(e.get('ts', 0)))}</td>"
-        f"<td class=\"col-mono\">{html.escape(str(e.get('brief_id', '')))}</td>"
-        f"<td>{_admin_badge(e.get('verdict') == 'YES', 'Pass', 'Fail')}</td>"
-        f"<td class=\"col-ip\">{html.escape(str(e.get('ip_hash', ''))[:12])}</td></tr>"
-        for e in checks_page_items
-    )
-    lookups_pager_html = _admin_pager_html("lookups", lookups_page, lookups_total_pages, f"&checks_page={checks_page}")
-    checks_pager_html = _admin_pager_html("checks", checks_page, checks_total_pages, f"&lookups_page={lookups_page}")
-
-    page = f"""<!doctype html>
-<html lang="en"><head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Stitch3 Validator — Admin</title>
-<link rel="icon" type="image/png" href="/assets/favicon-new.png">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link href="https://api.fontshare.com/v2/css?f[]=satoshi@700,500&display=swap" rel="stylesheet">
-<style>
-  :root {{
+ADMIN_STYLE = """
+  :root {
     color-scheme: dark;
     --black-0: #050507;
     --black-1: #0a0a0c;
@@ -714,22 +645,22 @@ def admin_panel(
     --font-body: "Inter", -apple-system, sans-serif;
     --font-mono: "JetBrains Mono", monospace;
     --tracking-label: .14em;
-  }}
-  * {{ box-sizing: border-box; }}
-  html {{ overflow-x: hidden; }}
-  body {{
+  }
+  * { box-sizing: border-box; }
+  html { overflow-x: hidden; }
+  body {
     background: var(--black-0);
     color: var(--gray-400);
     font-family: var(--font-body);
     line-height: 1.5;
     margin: 0;
-    padding: 48px 20px 64px;
+    padding: 0 0 64px;
     position: relative;
     overflow-x: hidden;
-  }}
+  }
   /* Same hero glow asset/technique as the public site's body::before, so
      this doesn't read as a bare admin utility page bolted onto the side. */
-  body::before {{
+  body::before {
     content: "";
     position: absolute;
     top: -160px;
@@ -746,24 +677,24 @@ def admin_panel(
     opacity: 0.8;
     pointer-events: none;
     z-index: 0;
-  }}
-  .page {{ max-width: 920px; margin: 0 auto; position: relative; z-index: 1; animation: glide-in 1.2s ease-out; }}
-  @keyframes glide-in {{
-    from {{ opacity: 0; transform: translateY(24px); }}
-    to {{ opacity: 1; transform: translateY(0); }}
-  }}
-  .admin-header {{ display: flex; align-items: center; gap: 14px; margin-bottom: 32px; }}
-  .admin-logo {{
+  }
+  .page { max-width: 920px; margin: 0 auto; padding: 48px 20px 0; position: relative; z-index: 1; animation: glide-in 0.5s ease-out; }
+  @keyframes glide-in {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .admin-header { display: flex; align-items: center; gap: 14px; margin-bottom: 32px; }
+  .admin-logo {
     height: 34px; width: 48px; flex-shrink: 0;
     background-color: var(--gray-100);
     -webkit-mask-image: url("/assets/logo-icon-only.png");
     mask-image: url("/assets/logo-icon-only.png");
     -webkit-mask-size: contain; mask-size: contain;
     -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
-  }}
-  .kicker {{ font-family: var(--font-display); font-weight: 700; font-size: 22px; color: var(--gray-100); letter-spacing: -0.01em; display: block; }}
-  .disclaimer {{ font-size: 12.5px; color: var(--gray-500); }}
-  .card {{
+  }
+  .kicker { font-family: var(--font-display); font-weight: 700; font-size: 22px; color: var(--gray-100); letter-spacing: -0.01em; display: block; }
+  .disclaimer { font-size: 12.5px; color: var(--gray-500); }
+  .card {
     position: relative;
     background: radial-gradient(ellipse 120% 100% at 50% 0%, #b882ff14 0%, transparent 60%), var(--black-1);
     border: 1px solid var(--border-accent);
@@ -771,114 +702,131 @@ def admin_panel(
     padding: 24px;
     box-shadow: 0 8px 48px #0009, 0 0 64px #b882ff14;
     margin-bottom: 24px;
-  }}
-  .card h2 {{
+  }
+  .card h2 {
     margin: 0 0 4px;
     font-family: var(--font-display);
     font-size: 15px;
     font-weight: 700;
     color: var(--gray-100);
-  }}
-  .card .count {{ font-size: 12px; color: var(--gray-500); margin-bottom: 16px; }}
-  .card .count strong {{ font-family: var(--font-mono); color: var(--purple-light); font-weight: 600; }}
-  td.col-rank {{ font-family: var(--font-mono); color: var(--purple-light); }}
-  td.col-count {{ font-family: var(--font-mono); color: var(--gray-100); }}
-  .table-wrap {{ overflow-x: auto; }}
-  table {{ border-collapse: collapse; width: 100%; font-size: 13px; white-space: nowrap; }}
-  th, td {{ text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border-input); }}
-  th {{
+  }
+  .card .count { font-size: 12px; color: var(--gray-500); margin-bottom: 16px; }
+  .card .count strong { font-family: var(--font-mono); color: var(--purple-light); font-weight: 600; }
+  td.col-rank { font-family: var(--font-mono); color: var(--purple-light); }
+  td.col-count { font-family: var(--font-mono); color: var(--gray-100); }
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; white-space: nowrap; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border-input); }
+  th {
     font-family: var(--font-mono);
     font-size: 10.5px;
     letter-spacing: var(--tracking-label);
     text-transform: uppercase;
     color: var(--gray-500);
     font-weight: 500;
-  }}
-  td {{ color: var(--gray-300); }}
-  td.col-time {{ color: var(--gray-500); font-size: 12px; }}
-  td.col-mono {{ font-family: var(--font-mono); color: var(--gray-100); }}
-  td.col-ip {{ font-family: var(--font-mono); color: var(--gray-500); font-size: 11.5px; }}
-  .empty-row td {{ color: var(--gray-500); font-style: italic; }}
-  .status-badge {{
+  }
+  td { color: var(--gray-300); }
+  td.col-time { color: var(--gray-500); font-size: 12px; }
+  td.col-mono { font-family: var(--font-mono); color: var(--gray-100); }
+  td.col-ip { font-family: var(--font-mono); color: var(--gray-500); font-size: 11.5px; }
+  .empty-row td { color: var(--gray-500); font-style: italic; }
+  .status-badge {
     display: inline-flex; align-items: center; gap: 7px;
     font-family: var(--font-mono); font-size: 11px; font-weight: 500;
     letter-spacing: var(--tracking-label); text-transform: uppercase;
-  }}
-  .status-dot {{ width: 7px; height: 7px; border-radius: 50%; }}
-  .status-active {{ color: var(--green); }}
-  .status-active .status-dot {{ background: var(--green); box-shadow: 0 0 6px #34d399aa; }}
-  .status-completed {{ color: var(--red); }}
-  .status-completed .status-dot {{ background: var(--red); box-shadow: 0 0 6px #f87171aa; }}
-  .admin-btn {{
+  }
+  .status-dot { width: 7px; height: 7px; border-radius: 50%; }
+  .status-active { color: var(--green); }
+  .status-active .status-dot { background: var(--green); box-shadow: 0 0 6px #34d399aa; }
+  .status-completed { color: var(--red); }
+  .status-completed .status-dot { background: var(--red); box-shadow: 0 0 6px #f87171aa; }
+  .admin-btn {
     font-family: var(--font-body); font-size: 13px; font-weight: 600;
     padding: 9px 16px; border: none; border-radius: var(--radius-control);
     background: var(--gradient-brand); color: #050507; cursor: pointer;
-  }}
-  .admin-btn:hover {{ filter: brightness(1.05); }}
-  .admin-btn-danger {{
+  }
+  .admin-btn:hover { filter: brightness(1.05); }
+  .admin-btn-danger {
     background: none; color: var(--red); border: 1px solid #f8717159;
     padding: 5px 10px; font-size: 12px;
-  }}
-  .admin-btn-danger:hover {{ filter: none; background: #f8717114; }}
-  .admin-toast {{
+  }
+  .admin-btn-danger:hover { filter: none; background: #f8717114; }
+  .admin-toast {
     font-size: 13px; color: var(--gray-300); background: var(--black-2);
     border: 1px solid var(--border-card); border-radius: var(--radius-control);
     padding: 12px 16px; margin-bottom: 24px;
-  }}
-  td.col-wrap {{ white-space: normal; max-width: 420px; }}
-  .admin-form {{ display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }}
-  .admin-form label {{
+  }
+  td.col-wrap { white-space: normal; max-width: 420px; }
+  .admin-form { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+  .admin-form label {
     font-family: var(--font-mono); font-size: 10.5px; letter-spacing: var(--tracking-label);
     text-transform: uppercase; color: var(--gray-500); display: block; margin-bottom: 5px;
-  }}
-  .admin-form input, .admin-form textarea {{
+  }
+  .admin-form input, .admin-form textarea {
     width: 100%; background: var(--black-2); border: 1px solid var(--border-input);
     border-radius: var(--radius-control); color: var(--gray-100); font-family: var(--font-body);
     font-size: 13px; padding: 9px 11px; box-sizing: border-box;
-  }}
-  .admin-form textarea {{ resize: vertical; min-height: 70px; font-family: var(--font-body); }}
-  .admin-form-row {{ display: flex; gap: 12px; flex-wrap: wrap; }}
-  .admin-form-row > div {{ flex: 1; min-width: 160px; }}
-  .admin-nav {{
+  }
+  .admin-form textarea { resize: vertical; min-height: 70px; font-family: var(--font-body); }
+  .admin-form-row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .admin-form-row > div { flex: 1; min-width: 160px; }
+  .admin-nav {
     position: sticky; top: 0; z-index: 10;
     background: #050507e6; backdrop-filter: blur(10px);
     border-bottom: 1px solid var(--border-card);
-  }}
-  .admin-nav-inner {{
+  }
+  .admin-nav-inner {
     max-width: 920px; margin: 0 auto; padding: 12px 20px;
     display: flex; gap: 4px; flex-wrap: wrap;
-  }}
-  .admin-nav-inner a {{
+  }
+  .admin-nav-inner a {
     font-family: var(--font-body); font-size: 12.5px; font-weight: 500;
     color: var(--gray-400); text-decoration: none;
     padding: 6px 11px; border-radius: var(--radius-pill);
     white-space: nowrap;
-  }}
-  .admin-nav-inner a:hover {{ color: var(--gray-100); background: var(--black-2); }}
-  .admin-pager {{
+  }
+  .admin-nav-inner a:hover { color: var(--gray-100); background: var(--black-2); }
+  .admin-nav-inner a.active { color: #050507; background: var(--gradient-brand); font-weight: 600; }
+  .admin-pager {
     display: flex; align-items: center; justify-content: center; gap: 16px;
     margin-top: 16px;
-  }}
-  .admin-pager-btn {{
+  }
+  .admin-pager-btn {
     font-family: var(--font-body); font-size: 12.5px; font-weight: 600;
     color: var(--purple-light); text-decoration: none;
     padding: 7px 14px; border: 1px solid var(--border-input); border-radius: var(--radius-control);
-  }}
-  .admin-pager-btn:hover {{ background: var(--black-2); }}
-  .admin-pager-btn-disabled {{ color: var(--gray-500); opacity: 0.5; cursor: default; }}
-  .admin-pager-status {{ font-family: var(--font-mono); font-size: 12px; color: var(--gray-500); }}
-</style></head>
+  }
+  .admin-pager-btn:hover { background: var(--black-2); }
+  .admin-pager-btn-disabled { color: var(--gray-500); opacity: 0.5; cursor: default; }
+  .admin-pager-status { font-family: var(--font-mono); font-size: 12px; color: var(--gray-500); }
+"""
+
+
+def _admin_shell(active_slug: str, body_html: str) -> str:
+    """Wraps one section's body_html in the shared admin page chrome (nav,
+    header, styles). Each section is its own real route/page now (see
+    ADMIN_SECTIONS + the per-section handlers below) -- clicking a nav link
+    navigates to a new URL and loads only that section, rather than
+    scrolling an anchor on one giant page."""
+    active_cls = ' class="active"'
+    nav_links = "".join(
+        f'<a href="/admin/{slug}"{active_cls if slug == active_slug else ""}>{label}</a>'
+        for slug, label in ADMIN_SECTIONS
+    )
+    return f"""<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stitch3 Validator — Admin</title>
+<link rel="icon" type="image/png" href="/assets/favicon-new.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://api.fontshare.com/v2/css?f[]=satoshi@700,500&display=swap" rel="stylesheet">
+<style>{ADMIN_STYLE}</style></head>
 <body>
   <nav class="admin-nav">
-    <div class="admin-nav-inner">
-      <a href="#avatars">Avatars</a>
-      <a href="#update-items">Banner Items</a>
-      <a href="#ecosystem">Ecosystem</a>
-      <a href="#top-handles">Top Handles</a>
-      <a href="#top-campaigns">Top Campaigns</a>
-      <a href="#lookups">Engagement Lookups</a>
-      <a href="#checks">Tweet Checks</a>
-    </div>
+    <div class="admin-nav-inner">{nav_links}</div>
   </nav>
   <div class="page">
     <div class="admin-header">
@@ -888,17 +836,62 @@ def admin_panel(
         <span class="disclaimer">Owner-only usage log. Not linked from the public site.</span>
       </div>
     </div>
+    {body_html}
+  </div>
+</body></html>"""
 
-    {avatar_toast_html}
-    <div class="card" id="avatars">
+
+def _load_lookup_checks() -> tuple[list[dict], list[dict]]:
+    # Read a wider window than either table paginates through -- lookups and
+    # checks share one combined event log, so a small limit here could let
+    # one event type's older pages silently run dry sooner than the other's
+    # (e.g. a "checks page 3" that doesn't exist purely because 2000 events'
+    # worth of the *other* type crowded it out of the read, not because 3
+    # pages' worth of checks doesn't exist).
+    events = read_events(limit=ADMIN_EVENTS_READ_LIMIT)
+    lookups = [e for e in events if e.get("type") == "engagement_lookup"]
+    checks = [e for e in events if e.get("type") == "tweet_check"]
+    return lookups, checks
+
+
+@app.get("/admin", dependencies=[Depends(require_admin)])
+def admin_root():
+    return RedirectResponse(url="/admin/avatars", status_code=303)
+
+
+@app.get("/admin/avatars", response_class=HTMLResponse, dependencies=[Depends(require_admin)])
+def admin_avatars(
+    avatar_refreshed: bool = False,
+    avatar_considered: int = 0,
+    avatar_already_fresh: int = 0,
+    avatar_fetched: int = 0,
+    avatar_failed: int = 0,
+    avatar_budget_exhausted: bool = False,
+):
+    avatar_toast_html = ""
+    if avatar_refreshed:
+        exhausted_note = " Daily fetch budget ran out partway through." if avatar_budget_exhausted else ""
+        avatar_toast_html = (
+            f'<div class="admin-toast">Avatar refresh: <strong>{avatar_fetched}</strong> fetched, '
+            f"{avatar_already_fresh} already fresh, {avatar_failed} failed, "
+            f"out of {avatar_considered} considered accounts checked.{exhausted_note}</div>"
+        )
+    body = f"""{avatar_toast_html}
+    <div class="card">
       <h2>Engagement Value avatars</h2>
       <div class="count">Fetches up to the daily unavatar.io budget worth of new accounts' avatars to disk each run (50/day with UNAVATAR_API_KEY set, 20/day without), highest-influence first, until every considered account eventually has one (see engagement.py). No automatic schedule; run this manually whenever coverage needs a top-up.</div>
       <form method="post" action="/admin/refresh-avatars">
         <button type="submit" class="admin-btn">Refresh avatars</button>
       </form>
-    </div>
+    </div>"""
+    return HTMLResponse(content=_admin_shell("avatars", body))
 
-    <div class="card" id="update-items">
+
+@app.get("/admin/updates", response_class=HTMLResponse, dependencies=[Depends(require_admin)])
+def admin_updates():
+    update_item_rows = _admin_update_item_rows(list_update_items())
+    body = f"""
+    <div class="card">
       <h2>Bitcast Protocol Updates banner</h2>
       <div class="count">Published straight from here -- no code edit or deploy needed. Shown on the public site's update pill, newest first, and ages out after 7 days.</div>
       <form class="admin-form" method="post" action="/admin/update-items">
@@ -928,9 +921,23 @@ def admin_panel(
           <tbody>{update_item_rows}</tbody>
         </table>
       </div>
-    </div>
+    </div>"""
+    return HTMLResponse(content=_admin_shell("updates", body))
 
-    <div class="card" id="ecosystem">
+
+@app.get("/admin/ecosystem", response_class=HTMLResponse, dependencies=[Depends(require_admin)])
+def admin_ecosystem():
+    lookups, _checks = _load_lookup_checks()
+    ecosystem_counts = Counter(e["ecosystem_id"] for e in lookups if e.get("ecosystem_id"))
+    ecosystem_total = sum(ecosystem_counts.values())
+    ecosystem_rows = "".join(
+        f"<tr><td class=\"col-mono\">{html.escape(ADMIN_POOL_LABELS.get(eco, eco))}</td>"
+        f"<td class=\"col-count\">{count}</td>"
+        f"<td class=\"col-count\">{round(count / ecosystem_total * 100)}%</td></tr>"
+        for eco, count in ecosystem_counts.most_common()
+    ) or '<tr class="empty-row"><td colspan="3">No lookups logged yet.</td></tr>'
+    body = f"""
+    <div class="card">
       <h2>Ecosystem breakdown</h2>
       <div class="count">Share of engagement lookups by ecosystem</div>
       <div class="table-wrap">
@@ -939,9 +946,16 @@ def admin_panel(
           <tbody>{ecosystem_rows}</tbody>
         </table>
       </div>
-    </div>
+    </div>"""
+    return HTMLResponse(content=_admin_shell("ecosystem", body))
 
-    <div class="card" id="top-handles">
+
+@app.get("/admin/top-handles", response_class=HTMLResponse, dependencies=[Depends(require_admin)])
+def admin_top_handles():
+    lookups, _checks = _load_lookup_checks()
+    top_handles = Counter(f"@{e['handle']}" for e in lookups if e.get("handle")).most_common(10)
+    body = f"""
+    <div class="card">
       <h2>Most looked-up handles</h2>
       <div class="count">Top 10 by lookup count</div>
       <div class="table-wrap">
@@ -950,9 +964,16 @@ def admin_panel(
           <tbody>{_admin_rank_rows(top_handles)}</tbody>
         </table>
       </div>
-    </div>
+    </div>"""
+    return HTMLResponse(content=_admin_shell("top-handles", body))
 
-    <div class="card" id="top-campaigns">
+
+@app.get("/admin/top-campaigns", response_class=HTMLResponse, dependencies=[Depends(require_admin)])
+def admin_top_campaigns():
+    _lookups, checks = _load_lookup_checks()
+    top_campaigns = Counter(e["brief_id"] for e in checks if e.get("brief_id")).most_common(10)
+    body = f"""
+    <div class="card">
       <h2>Most-checked campaigns</h2>
       <div class="count">Top 10 by check count</div>
       <div class="table-wrap">
@@ -961,9 +982,26 @@ def admin_panel(
           <tbody>{_admin_rank_rows(top_campaigns)}</tbody>
         </table>
       </div>
-    </div>
+    </div>"""
+    return HTMLResponse(content=_admin_shell("top-campaigns", body))
 
-    <div class="card" id="lookups">
+
+@app.get("/admin/lookups", response_class=HTMLResponse, dependencies=[Depends(require_admin)])
+def admin_lookups(page: int = 1):
+    lookups, _checks = _load_lookup_checks()
+    page_items, page, total_pages = _paginate(lookups, page)
+    lookup_rows = "".join(
+        f"<tr><td class=\"col-time\">{html.escape(_fmt_ts(e.get('ts', 0)))}</td>"
+        f"<td class=\"col-mono\">@{html.escape(str(e.get('handle', '')))}</td>"
+        f"<td class=\"col-mono\">{html.escape(str(e.get('campaign_id', '')))}</td>"
+        f"<td>{html.escape(str(e.get('ecosystem_id', '')))}</td>"
+        f"<td>{_admin_badge(bool(e.get('found')), 'Found', 'Not found')}</td>"
+        f"<td class=\"col-ip\">{html.escape(str(e.get('ip_hash', ''))[:12])}</td></tr>"
+        for e in page_items
+    )
+    pager_html = _admin_pager_html("/admin/lookups", page, total_pages)
+    body = f"""
+    <div class="card">
       <h2>Engagement Value lookups</h2>
       <div class="count"><strong>{len(lookups)}</strong> total, most recent first</div>
       <div class="table-wrap">
@@ -974,10 +1012,25 @@ def admin_panel(
           </tbody>
         </table>
       </div>
-      {lookups_pager_html}
-    </div>
+      {pager_html}
+    </div>"""
+    return HTMLResponse(content=_admin_shell("lookups", body))
 
-    <div class="card" id="checks">
+
+@app.get("/admin/checks", response_class=HTMLResponse, dependencies=[Depends(require_admin)])
+def admin_checks(page: int = 1):
+    _lookups, checks = _load_lookup_checks()
+    page_items, page, total_pages = _paginate(checks, page)
+    check_rows = "".join(
+        f"<tr><td class=\"col-time\">{html.escape(_fmt_ts(e.get('ts', 0)))}</td>"
+        f"<td class=\"col-mono\">{html.escape(str(e.get('brief_id', '')))}</td>"
+        f"<td>{_admin_badge(e.get('verdict') == 'YES', 'Pass', 'Fail')}</td>"
+        f"<td class=\"col-ip\">{html.escape(str(e.get('ip_hash', ''))[:12])}</td></tr>"
+        for e in page_items
+    )
+    pager_html = _admin_pager_html("/admin/checks", page, total_pages)
+    body = f"""
+    <div class="card">
       <h2>Tweet checks</h2>
       <div class="count"><strong>{len(checks)}</strong> total, most recent first</div>
       <div class="table-wrap">
@@ -988,11 +1041,9 @@ def admin_panel(
           </tbody>
         </table>
       </div>
-      {checks_pager_html}
-    </div>
-  </div>
-</body></html>"""
-    return HTMLResponse(content=page)
+      {pager_html}
+    </div>"""
+    return HTMLResponse(content=_admin_shell("checks", body))
 
 
 @app.post("/evaluate", response_model=EvaluateResponse)
