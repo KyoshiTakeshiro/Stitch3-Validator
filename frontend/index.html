@@ -665,6 +665,17 @@
   .chutes-badge.status-slow .status-dot { background: var(--amber); box-shadow: 0 0 6px #fbbf24aa; }
   .chutes-badge.status-congested { color: var(--red); }
   .chutes-badge.status-congested .status-dot { background: var(--red); box-shadow: 0 0 6px #f87171aa; }
+  /* Overrides whatever state color is active while the badge is alternated
+     to the coffee-nudge text (see startChutesAlternation()) -- a donation
+     ask rendering in the "congested" red would read as an alarm, not an ask.
+     Comes after the status-* rules so it wins on equal specificity. */
+  .chutes-badge.chutes-coffee { color: var(--purple-light); cursor: pointer; }
+  .chutes-badge.chutes-coffee .status-dot { background: var(--purple); box-shadow: 0 0 6px #b882ff99; }
+  .chutes-badge.chutes-coffee:hover { filter: brightness(1.15); }
+  .coffee-emoji {
+    font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+    font-size: 20px; line-height: 1; vertical-align: middle; display: inline-block; margin-left: 1px;
+  }
 
   .select-wrap { position: relative; }
   .select-trigger {
@@ -1702,11 +1713,43 @@ const CHUTES_STATUS_LABELS = {
   congested: "Chutes: congested right now",
   unknown: "Chutes: measuring response time…",
 };
+const CHUTES_COFFEE_TEXT = "Enjoying this? Buy me a coffee";
+
+// The Chutes badge alternates its own text with a coffee nudge every 4s
+// during the wait (rather than a separate element), so it stays confined to
+// this one small badge instead of adding new UI. chutesCurrentState always
+// tracks the latest real reading; chutesShowingCoffee tracks which of the
+// two texts is currently on screen, so a fresh real reading (updateChutesBadge)
+// and the alternation timer (startChutesAlternation) can both write to the
+// same badge without stepping on each other.
+let chutesCurrentState = "unknown";
+let chutesShowingCoffee = false;
+let chutesAlternateTimer = null;
+
+function renderChutesBadgeText() {
+  // The coffee variant needs its own markup (not just textContent) so the
+  // ☕ emoji can render larger than the badge's 10px base text -- at that
+  // size the emoji was barely legible. Real status labels stay plain text,
+  // since they're just static strings with nothing to size up.
+  if (chutesShowingCoffee) {
+    chutesBadgeText.innerHTML = `${CHUTES_COFFEE_TEXT} <span class="coffee-emoji">☕️</span>`;
+  } else {
+    chutesBadgeText.textContent = CHUTES_STATUS_LABELS[chutesCurrentState] || chutesCurrentState;
+  }
+}
 
 function updateChutesBadge(state) {
-  chutesBadge.className = `status-badge chutes-badge status-${state}`;
-  chutesBadgeText.textContent = CHUTES_STATUS_LABELS[state] || state;
+  chutesCurrentState = state;
   chutesBadge.style.display = "inline-flex";
+  // If the coffee nudge is on screen right now, don't stomp it -- a real SSE
+  // check event landing mid-alternation would otherwise instantly overwrite
+  // (and effectively hide) the coffee text the moment it appears, since this
+  // fires far more often than the 4s alternation interval during a busy
+  // multi-check run. The freshly stored chutesCurrentState is picked up
+  // naturally the next time the alternation timer flips back to "real".
+  if (chutesShowingCoffee) return;
+  chutesBadge.className = `status-badge chutes-badge status-${state}`;
+  renderChutesBadgeText();
 }
 
 function resetChutesBadge() {
@@ -1717,6 +1760,29 @@ function resetChutesBadge() {
   // before that).
   updateChutesBadge("unknown");
 }
+
+function startChutesAlternation() {
+  clearInterval(chutesAlternateTimer);
+  chutesAlternateTimer = setInterval(() => {
+    chutesShowingCoffee = !chutesShowingCoffee;
+    chutesBadge.classList.toggle("chutes-coffee", chutesShowingCoffee);
+    renderChutesBadgeText();
+  }, 4000);
+}
+
+function stopChutesAlternation() {
+  clearInterval(chutesAlternateTimer);
+  chutesAlternateTimer = null;
+  chutesShowingCoffee = false;
+  chutesBadge.classList.remove("chutes-coffee");
+  // Restore the real reading rather than leaving stale coffee text sitting
+  // in the (now-hidden, since #loading is hidden too) badge -- harmless
+  // today since nothing reads it while hidden, but keeps the badge's DOM
+  // state consistent with its className/flag reset above.
+  renderChutesBadgeText();
+}
+
+chutesBadge.addEventListener("click", () => { if (chutesShowingCoffee) openTiptao(); });
 
 function updateCheckDots(index, verdict) {
   const dot = checkDots[index - 1];
@@ -1752,6 +1818,7 @@ async function runEvaluation() {
   resultDiv.innerHTML = "";
   resetCheckDots();
   resetChutesBadge();
+  startChutesAlternation();
 
   try {
     const resp = await fetch("/evaluate/stream", {
@@ -1838,6 +1905,7 @@ async function runEvaluation() {
   } finally {
     evaluateBtn.disabled = false;
     loadingDiv.style.display = "none";
+    stopChutesAlternation();
   }
 }
 
