@@ -576,6 +576,34 @@ async def admin_delete_update_item(item_id: str):
     return RedirectResponse(url="/admin#update-items", status_code=303)
 
 
+ADMIN_EVENTS_READ_LIMIT = 2000
+ADMIN_PAGE_SIZE = 25
+
+
+def _paginate(items: list, page: int, page_size: int = ADMIN_PAGE_SIZE) -> tuple[list, int, int]:
+    """Returns (page_items, clamped_page, total_pages). Clamps page into
+    [1, total_pages] rather than erroring on an out-of-range query param
+    (e.g. a stale bookmarked link after the log shrinks/rotates)."""
+    total_pages = max(1, -(-len(items) // page_size))  # ceil div
+    page = min(max(page, 1), total_pages)
+    start = (page - 1) * page_size
+    return items[start:start + page_size], page, total_pages
+
+
+def _admin_pager_html(section: str, page: int, total_pages: int, other_params: str) -> str:
+    if total_pages <= 1:
+        return ""
+    prev_html = (
+        f'<a class="admin-pager-btn" href="?{section}_page={page - 1}{other_params}#{section}">← Prev</a>'
+        if page > 1 else '<span class="admin-pager-btn admin-pager-btn-disabled">← Prev</span>'
+    )
+    next_html = (
+        f'<a class="admin-pager-btn" href="?{section}_page={page + 1}{other_params}#{section}">Next →</a>'
+        if page < total_pages else '<span class="admin-pager-btn admin-pager-btn-disabled">Next →</span>'
+    )
+    return f'<div class="admin-pager">{prev_html}<span class="admin-pager-status">Page {page} of {total_pages}</span>{next_html}</div>'
+
+
 @app.get("/admin", response_class=HTMLResponse, dependencies=[Depends(require_admin)])
 def admin_panel(
     avatar_refreshed: bool = False,
@@ -584,13 +612,19 @@ def admin_panel(
     avatar_fetched: int = 0,
     avatar_failed: int = 0,
     avatar_budget_exhausted: bool = False,
+    lookups_page: int = 1,
+    checks_page: int = 1,
 ):
     """Owner-only view of raw usage: every engagement-value handle lookup
     and every tweet check, newest first. Gated by HTTP Basic Auth
     (require_admin) -- not linked from anywhere in the public UI. Styled to
     match the public site's own design tokens (frontend/index.html's :root
     block) rather than a bare utility page, since this is still a page the
-    owner will look at regularly."""
+    owner will look at regularly.
+
+    The two raw-log tables (lookups/checks) are paginated independently via
+    ?lookups_page=N / ?checks_page=N query params -- plain GET links, no
+    client JS, matching this page's existing form/redirect-only pattern."""
     avatar_toast_html = ""
     if avatar_refreshed:
         exhausted_note = " Daily fetch budget ran out partway through." if avatar_budget_exhausted else ""
@@ -602,7 +636,13 @@ def admin_panel(
 
     update_item_rows = _admin_update_item_rows(list_update_items())
 
-    events = read_events(limit=500)
+    # Read a wider window than either table paginates through -- lookups and
+    # checks share one combined event log, so a small limit here could let
+    # one event type's older pages silently run dry sooner than the other's
+    # (e.g. a "checks page 3" that doesn't exist purely because 2000 events'
+    # worth of the *other* type crowded it out of the read, not because 3
+    # pages' worth of checks doesn't exist).
+    events = read_events(limit=ADMIN_EVENTS_READ_LIMIT)
     lookups = [e for e in events if e.get("type") == "engagement_lookup"]
     checks = [e for e in events if e.get("type") == "tweet_check"]
 
@@ -618,6 +658,9 @@ def admin_panel(
         for eco, count in ecosystem_counts.most_common()
     ) or '<tr class="empty-row"><td colspan="3">No lookups logged yet.</td></tr>'
 
+    lookups_page_items, lookups_page, lookups_total_pages = _paginate(lookups, lookups_page)
+    checks_page_items, checks_page, checks_total_pages = _paginate(checks, checks_page)
+
     lookup_rows = "".join(
         f"<tr><td class=\"col-time\">{html.escape(_fmt_ts(e.get('ts', 0)))}</td>"
         f"<td class=\"col-mono\">@{html.escape(str(e.get('handle', '')))}</td>"
@@ -625,15 +668,17 @@ def admin_panel(
         f"<td>{html.escape(str(e.get('ecosystem_id', '')))}</td>"
         f"<td>{_admin_badge(bool(e.get('found')), 'Found', 'Not found')}</td>"
         f"<td class=\"col-ip\">{html.escape(str(e.get('ip_hash', ''))[:12])}</td></tr>"
-        for e in lookups
+        for e in lookups_page_items
     )
     check_rows = "".join(
         f"<tr><td class=\"col-time\">{html.escape(_fmt_ts(e.get('ts', 0)))}</td>"
         f"<td class=\"col-mono\">{html.escape(str(e.get('brief_id', '')))}</td>"
         f"<td>{_admin_badge(e.get('verdict') == 'YES', 'Pass', 'Fail')}</td>"
         f"<td class=\"col-ip\">{html.escape(str(e.get('ip_hash', ''))[:12])}</td></tr>"
-        for e in checks
+        for e in checks_page_items
     )
+    lookups_pager_html = _admin_pager_html("lookups", lookups_page, lookups_total_pages, f"&checks_page={checks_page}")
+    checks_pager_html = _admin_pager_html("checks", checks_page, checks_total_pages, f"&lookups_page={lookups_page}")
 
     page = f"""<!doctype html>
 <html lang="en"><head>
@@ -794,8 +839,47 @@ def admin_panel(
   .admin-form textarea {{ resize: vertical; min-height: 70px; font-family: var(--font-body); }}
   .admin-form-row {{ display: flex; gap: 12px; flex-wrap: wrap; }}
   .admin-form-row > div {{ flex: 1; min-width: 160px; }}
+  .admin-nav {{
+    position: sticky; top: 0; z-index: 10;
+    background: #050507e6; backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border-card);
+  }}
+  .admin-nav-inner {{
+    max-width: 920px; margin: 0 auto; padding: 12px 20px;
+    display: flex; gap: 4px; flex-wrap: wrap;
+  }}
+  .admin-nav-inner a {{
+    font-family: var(--font-body); font-size: 12.5px; font-weight: 500;
+    color: var(--gray-400); text-decoration: none;
+    padding: 6px 11px; border-radius: var(--radius-pill);
+    white-space: nowrap;
+  }}
+  .admin-nav-inner a:hover {{ color: var(--gray-100); background: var(--black-2); }}
+  .admin-pager {{
+    display: flex; align-items: center; justify-content: center; gap: 16px;
+    margin-top: 16px;
+  }}
+  .admin-pager-btn {{
+    font-family: var(--font-body); font-size: 12.5px; font-weight: 600;
+    color: var(--purple-light); text-decoration: none;
+    padding: 7px 14px; border: 1px solid var(--border-input); border-radius: var(--radius-control);
+  }}
+  .admin-pager-btn:hover {{ background: var(--black-2); }}
+  .admin-pager-btn-disabled {{ color: var(--gray-500); opacity: 0.5; cursor: default; }}
+  .admin-pager-status {{ font-family: var(--font-mono); font-size: 12px; color: var(--gray-500); }}
 </style></head>
 <body>
+  <nav class="admin-nav">
+    <div class="admin-nav-inner">
+      <a href="#avatars">Avatars</a>
+      <a href="#update-items">Banner Items</a>
+      <a href="#ecosystem">Ecosystem</a>
+      <a href="#top-handles">Top Handles</a>
+      <a href="#top-campaigns">Top Campaigns</a>
+      <a href="#lookups">Engagement Lookups</a>
+      <a href="#checks">Tweet Checks</a>
+    </div>
+  </nav>
   <div class="page">
     <div class="admin-header">
       <div class="admin-logo" role="img" aria-label="Stitch3 Validator"></div>
@@ -806,7 +890,7 @@ def admin_panel(
     </div>
 
     {avatar_toast_html}
-    <div class="card">
+    <div class="card" id="avatars">
       <h2>Engagement Value avatars</h2>
       <div class="count">Fetches up to the daily unavatar.io budget worth of new accounts' avatars to disk each run (50/day with UNAVATAR_API_KEY set, 20/day without), highest-influence first, until every considered account eventually has one (see engagement.py). No automatic schedule; run this manually whenever coverage needs a top-up.</div>
       <form method="post" action="/admin/refresh-avatars">
@@ -846,7 +930,7 @@ def admin_panel(
       </div>
     </div>
 
-    <div class="card">
+    <div class="card" id="ecosystem">
       <h2>Ecosystem breakdown</h2>
       <div class="count">Share of engagement lookups by ecosystem</div>
       <div class="table-wrap">
@@ -857,7 +941,7 @@ def admin_panel(
       </div>
     </div>
 
-    <div class="card">
+    <div class="card" id="top-handles">
       <h2>Most looked-up handles</h2>
       <div class="count">Top 10 by lookup count</div>
       <div class="table-wrap">
@@ -868,7 +952,7 @@ def admin_panel(
       </div>
     </div>
 
-    <div class="card">
+    <div class="card" id="top-campaigns">
       <h2>Most-checked campaigns</h2>
       <div class="count">Top 10 by check count</div>
       <div class="table-wrap">
@@ -879,9 +963,9 @@ def admin_panel(
       </div>
     </div>
 
-    <div class="card">
+    <div class="card" id="lookups">
       <h2>Engagement Value lookups</h2>
-      <div class="count"><strong>{len(lookups)}</strong> shown, most recent first</div>
+      <div class="count"><strong>{len(lookups)}</strong> total, most recent first</div>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Time</th><th>Handle</th><th>Campaign</th><th>Ecosystem</th><th>Status</th><th>IP hash</th></tr></thead>
@@ -890,11 +974,12 @@ def admin_panel(
           </tbody>
         </table>
       </div>
+      {lookups_pager_html}
     </div>
 
-    <div class="card">
+    <div class="card" id="checks">
       <h2>Tweet checks</h2>
-      <div class="count"><strong>{len(checks)}</strong> shown, most recent first</div>
+      <div class="count"><strong>{len(checks)}</strong> total, most recent first</div>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Time</th><th>Brief</th><th>Verdict</th><th>IP hash</th></tr></thead>
@@ -903,6 +988,7 @@ def admin_panel(
           </tbody>
         </table>
       </div>
+      {checks_pager_html}
     </div>
   </div>
 </body></html>"""
