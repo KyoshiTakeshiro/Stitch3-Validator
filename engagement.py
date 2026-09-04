@@ -499,12 +499,15 @@ def considered_accounts_for_campaign(maps: list[dict], stale_decay: float = STAL
     """Mirrors campaigns.considered_accounts_for_campaign: latest map's
     accounts at full influence, plus accounts from older maps that have
     since dropped out, at stale_decay. Returns {casefold_username: {influence,
-    display}} plus the latest map (needed for relationship edges)."""
+    display, x_id}} plus the latest map (needed for relationship edges).
+    x_id is carried along (unused by the engagement-value math itself) so
+    callers can cross-reference eligible_creator_ids_for_campaign below,
+    which is keyed by x_id rather than username."""
     if not maps:
         raise HTTPException(status_code=404, detail="This campaign has no ecosystem map data yet.")
     latest = maps[-1]
     considered = {
-        a["username"].casefold(): {"influence": a["influence"], "display": a["username"]}
+        a["username"].casefold(): {"influence": a["influence"], "display": a["username"], "x_id": a["x_id"]}
         for a in latest["accounts"]
     }
     older: dict = {}
@@ -512,8 +515,34 @@ def considered_accounts_for_campaign(maps: list[dict], stale_decay: float = STAL
         for a in m["accounts"]:
             older[a["username"].casefold()] = a
     for key, a in older.items():
-        considered.setdefault(key, {"influence": a["influence"] * stale_decay, "display": a["username"]})
+        considered.setdefault(key, {"influence": a["influence"] * stale_decay, "display": a["username"], "x_id": a["x_id"]})
     return considered, latest
+
+
+def eligible_creator_ids_for_campaign(maps: list[dict], max_members: Optional[int]) -> frozenset:
+    """Mirrors campaigns.eligible_creator_ids_for_campaign /
+    eligible_creator_ids_in_map: whether a creator's own tweets count toward
+    a campaign's rewards at all is a *separate* gate from engagement-value
+    influence -- each campaign has an explicit eligible_creator_x_ids pool
+    per map (not necessarily every "considered" account), optionally capped
+    to the top max_members of that pool by influence. Eligibility is the
+    UNION across every map relevant to the campaign's window (not just the
+    latest) -- a creator who cleared the cutoff in an earlier snapshot stays
+    eligible even if a later recalibration would have excluded them, same
+    "any relevant snapshot counts" principle as the stale-decay carryover
+    above, just binary in/out instead of decayed."""
+    eligible: set = set()
+    for m in maps:
+        explicit = set(m.get("eligible_creator_x_ids", []))
+        if max_members is None:
+            eligible.update(explicit)
+            continue
+        ranked = sorted(
+            (a for a in m["accounts"] if a["x_id"] in explicit),
+            key=lambda a: (-a["influence"], int(a["x_id"])),
+        )
+        eligible.update(a["x_id"] for a in ranked[:max_members])
+    return frozenset(eligible)
 
 
 def relationship_lookup(latest_map: dict) -> dict[tuple[str, str], float]:
@@ -624,6 +653,16 @@ async def lookup(campaign_id: str, handle: str, request: Request, ecosystem_id: 
     rank = next(i for i, (u, _) in enumerate(ranked, start=1) if u == handle_key)
     baseline_score = round(influence * BASELINE_TWEET_SCORE_FACTOR, 6)
 
+    # Being a valuable engager (influence, rank above) is a completely
+    # separate question from being eligible to earn as a *creator* on this
+    # campaign -- that's gated by max_members, a hard cap on how many
+    # creators this campaign pays out to at all. A high engagement-value
+    # rank among "considered" accounts doesn't mean much if this handle
+    # isn't even in the smaller eligible-creator pool.
+    max_members = campaign.get("max_members")
+    eligible_ids = eligible_creator_ids_for_campaign(maps, max_members)
+    is_eligible = entry["x_id"] in eligible_ids
+
     rel_lookup = relationship_lookup(latest_map)
     rank_lookup = {u: i for i, (u, _) in enumerate(ranked, start=1)}
 
@@ -661,6 +700,8 @@ async def lookup(campaign_id: str, handle: str, request: Request, ecosystem_id: 
         "rank": rank,
         "total_considered": len(considered),
         "baseline_score": baseline_score,
+        "max_members": max_members,
+        "is_eligible": is_eligible,
         "engagers": engagers,
     }
 

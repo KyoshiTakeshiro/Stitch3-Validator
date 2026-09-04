@@ -990,6 +990,16 @@
     color: var(--purple);
     text-decoration: underline;
   }
+  /* Eligibility is a separate gate from engagement-value rank (see
+     engagement.py's eligible_creator_ids_for_campaign) -- whether this
+     handle's own tweets count toward the campaign's rewards at all, capped
+     by max_members, independent of how valuable their engagement is. */
+  .eligibility-badge { position: absolute; top: 16px; right: 16px; z-index: 1; }
+  .eligibility-badge .status-badge { font-size: 11px; }
+  .status-eligible { color: var(--green); }
+  .status-eligible .status-dot { background: var(--green); box-shadow: 0 0 6px #34d399aa; }
+  .status-ineligible { color: var(--red); }
+  .status-ineligible .status-dot { background: var(--red); box-shadow: 0 0 6px #f87171aa; }
   .summary-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; text-align: center; }
   .summary-stat { min-width: 0; }
   .summary-stat .value {
@@ -2402,6 +2412,7 @@ fitModeTabs();
         <span class="avatar-ring"><img class="avatar fade-target" id="eng-summary-avatar" alt="" onerror="onEngAvatarError(this)"></span>
         <a id="eng-summary-handle-text" class="fade-target" href="#" target="_blank" rel="noopener"></a>
       </div>
+      <div class="eligibility-badge fade-target" id="eng-summary-eligibility" style="display:none;"></div>
       <div class="summary-grid">
         <div class="summary-stat">
           <div class="value fade-target" id="eng-summary-influence"></div>
@@ -2474,6 +2485,20 @@ fitModeTabs();
       ["eng-summary-influence", el => { el.textContent = fmtNum(data.influence); }],
       ["eng-summary-rank", el => { el.textContent = `#${data.rank} / ${data.total_considered}`; }],
       ["eng-summary-baseline", el => { el.textContent = fmtNum(data.baseline_score); }],
+      ["eng-summary-eligibility", el => {
+        // max_members === null means this campaign has no creator cap at
+        // all (or, for a legacy campaign, an unknown one -- see
+        // engagement.py's eligible_creator_ids_for_campaign) -- nothing
+        // meaningful to show either way, so the badge just stays hidden
+        // rather than displaying a confident-looking verdict about a cap
+        // that may not exist.
+        if (data.max_members == null) { el.style.display = "none"; return; }
+        const cls = data.is_eligible ? "status-eligible" : "status-ineligible";
+        const label = data.is_eligible ? "Eligible" : "Not eligible";
+        const title = `This campaign only pays out to its top ${data.max_members} creators by influence.`;
+        el.innerHTML = `<span class="status-badge ${cls}" title="${escapeHtml(title)}"><span class="status-dot"></span>${label}</span>`;
+        el.style.display = "block";
+      }],
     ];
     const els = fields.map(([id]) => document.getElementById(id));
     els.forEach(el => el.classList.add("value-fade"));
