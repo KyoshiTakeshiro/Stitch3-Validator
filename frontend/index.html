@@ -856,6 +856,73 @@
     color: white;
   }
 
+  /* One-time (well, once-per-24h) support ask shown before the tool itself --
+     see the "Decisions made" doc for the exact frequency/dismissal rules.
+     Deliberately no backdrop-click/Escape dismissal (unlike .tiptao-backdrop
+     below) -- getting past this is meant to be a considered click, not
+     something tapped past by reflex. z-index above the TipTAO modal since
+     this can open in front of it (the coffee button here triggers that
+     modal on top of this one). */
+  .welcome-gate-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: #000000cc;
+    backdrop-filter: blur(6px);
+    align-items: center;
+    justify-content: center;
+    z-index: 200;
+    padding: 20px;
+  }
+  .welcome-gate-backdrop.open { display: flex; }
+  .welcome-gate-card {
+    max-width: 420px;
+    width: 100%;
+    text-align: center;
+    background: radial-gradient(ellipse 120% 100% at 50% 0%, #b882ff21 0%, transparent 60%), var(--black-1);
+    border-color: var(--border-accent);
+  }
+  .welcome-gate-title {
+    margin: 0 0 12px;
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 20px;
+    color: var(--gray-100);
+  }
+  .welcome-gate-text {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--gray-400);
+  }
+  .welcome-gate-actions { margin-top: 24px; display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  #welcome-gate-coffee-btn {
+    margin-top: 0;
+    width: 100%;
+    transition: transform 0.15s ease, filter 0.15s ease, box-shadow 0.15s ease;
+  }
+  #welcome-gate-coffee-btn:hover {
+    transform: translateY(-1px);
+    filter: brightness(1.08);
+    box-shadow: var(--glow-accent-soft);
+  }
+  .welcome-gate-skip-btn {
+    background: none;
+    border: none;
+    margin-top: 0;
+    padding: 0;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: normal;
+    color: var(--gray-500);
+    text-decoration: underline;
+    text-decoration-color: var(--border-input);
+    text-underline-offset: 3px;
+    cursor: pointer;
+  }
+  .welcome-gate-skip-btn:hover { color: var(--gray-300); text-decoration-color: currentColor; }
+
   @media (max-width: 480px) {
     body { padding: 16px 6px; }
     .card { padding: 14px; }
@@ -1308,6 +1375,17 @@
   </footer>
 </div>
 
+<div class="welcome-gate-backdrop" id="welcome-gate-backdrop">
+  <div class="card welcome-gate-card">
+    <p class="welcome-gate-title">Enjoying Stitch3 Validator?</p>
+    <p class="welcome-gate-text">Building and maintaining this tool takes time, hosting, and inference costs. To keep it all running, please consider buying me a coffee.</p>
+    <div class="welcome-gate-actions">
+      <button type="button" id="welcome-gate-coffee-btn">Buy me a coffee ☕</button>
+      <button type="button" class="welcome-gate-skip-btn" id="welcome-gate-skip-btn">Continue to the tool</button>
+    </div>
+  </div>
+</div>
+
 <div class="tiptao-backdrop" id="tiptao-backdrop">
   <div class="tiptao-modal">
     <button type="button" class="tiptao-modal-close" id="tiptao-close" aria-label="Close">×</button>
@@ -1333,6 +1411,43 @@ tiptaoTrigger.addEventListener("click", openTiptao);
 tiptaoClose.addEventListener("click", closeTiptao);
 tiptaoBackdrop.addEventListener("click", (e) => { if (e.target === tiptaoBackdrop) closeTiptao(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeTiptao(); });
+
+// One-time (well, once-per-24h) support ask shown before the tool itself.
+// Deliberately no backdrop-click/Escape dismissal here -- unlike the TipTAO
+// modal above, getting past this is meant to be a considered click on one
+// of the two buttons, not something dismissed by reflex.
+const WELCOME_GATE_KEY = "stitch3-welcome-gate-dismissed-at";
+const WELCOME_GATE_REPROMPT_MS = 24 * 60 * 60 * 1000;
+const welcomeGateBackdrop = document.getElementById("welcome-gate-backdrop");
+const welcomeGateCoffeeBtn = document.getElementById("welcome-gate-coffee-btn");
+const welcomeGateSkipBtn = document.getElementById("welcome-gate-skip-btn");
+
+function dismissWelcomeGate() {
+  welcomeGateBackdrop.classList.remove("open");
+  try {
+    localStorage.setItem(WELCOME_GATE_KEY, String(Date.now()));
+  } catch (e) {
+    // Storage unavailable (private browsing, disabled site data, etc.) --
+    // the gate will just show again next load, same as a first-ever visit.
+  }
+}
+
+(function initWelcomeGate() {
+  let dismissedAt = 0;
+  try {
+    dismissedAt = parseInt(localStorage.getItem(WELCOME_GATE_KEY), 10) || 0;
+  } catch (e) {
+    dismissedAt = 0;
+  }
+  if (Date.now() - dismissedAt < WELCOME_GATE_REPROMPT_MS) return;
+  welcomeGateBackdrop.classList.add("open");
+})();
+
+welcomeGateCoffeeBtn.addEventListener("click", () => {
+  dismissWelcomeGate();
+  openTiptao();
+});
+welcomeGateSkipBtn.addEventListener("click", dismissWelcomeGate);
 
 window.addEventListener('message',function(e){
   if(!e.data||e.data.type!=='tiptao-resize')return;
