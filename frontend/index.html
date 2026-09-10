@@ -1736,7 +1736,11 @@ document.addEventListener("click", (e) => {
   if (!e.target.closest(".select-wrap")) closePanel();
 });
 
-const BRAND_OVERVIEW_BASE_URL = "https://brand-overviews-x.s3.us-west-2.amazonaws.com";
+// Kept in sync with main.py's BRAND_OVERVIEW_BASE_URL -- moved off the old
+// public S3 bucket after Bitcast deleted it (2026-09). The frontend only
+// builds the href from this; whether the link actually shows is driven by
+// the has_brand_overview flag the backend fills in.
+const BRAND_OVERVIEW_BASE_URL = "https://brands.bitcast.network";
 
 function daysRemainingText(brief) {
   if (!brief.end_date) return "";

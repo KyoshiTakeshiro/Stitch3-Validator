@@ -40,7 +40,15 @@ from update_items import list_items as list_update_items
 load_dotenv()
 
 BITCAST_CAMPAIGN_MANIFEST_ENDPOINT = "https://bitcast-api.bitcast.network/api/v2/public/x/campaign-manifest-v4"
-BRAND_OVERVIEW_BASE_URL = "https://brand-overviews-x.s3.us-west-2.amazonaws.com"
+# Brand overview PDFs moved here after Bitcast tore down the old public S3
+# bucket (`brand-overviews-x`, which started returning NoSuchBucket in
+# 2026-09). This Cloudflare-fronted host returns a real application/pdf with
+# 200 when a brief has one and a clean 404 otherwise -- unlike the old
+# bucket's 403-for-missing-key behaviour, so has_brand_overview()'s
+# status_code == 200 check is now unambiguous. Still undocumented / not in
+# any Bitcast API -- if this one disappears too, re-check where their
+# campaign pages link brand briefs from.
+BRAND_OVERVIEW_BASE_URL = "https://brands.bitcast.network"
 CHUTES_ENDPOINT = "https://llm.chutes.ai/v1/chat/completions"
 CHUTES_API_KEY = os.getenv("CHUTES_API_KEY")
 NUM_LLM_CHECKS = 3
