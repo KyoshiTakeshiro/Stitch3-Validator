@@ -1757,7 +1757,28 @@ function linkifyText(text) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
-  return escaped.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+  return escaped.replace(/(https?:\/\/[^\s]+)/g, (match) => {
+    // \S+ happily swallows sentence punctuation right after a URL (a
+    // trailing "." ending the sentence, a wrapping ")", etc.) into both the
+    // visible text and the href -- e.g. "...status/123." linking to a URL
+    // that 404s because of the trailing dot. Peel trailing punctuation off
+    // one character at a time and render it as plain text after the closing
+    // </a> instead, stopping at a ")" that closes a "(" earlier in the URL
+    // (so a URL that legitimately ends in a balanced paren keeps it).
+    const PUNCTUATION = ".,;:!?)]}'\"";
+    let end = match.length;
+    while (end > 0 && PUNCTUATION.includes(match[end - 1])) {
+      if (match[end - 1] === ")") {
+        const opens = (match.slice(0, end - 1).match(/\(/g) || []).length;
+        const closes = (match.slice(0, end - 1).match(/\)/g) || []).length;
+        if (opens > closes) break;
+      }
+      end--;
+    }
+    const url = match.slice(0, end);
+    const suffix = match.slice(end);
+    return `<a href="${url}" target="_blank" rel="noopener">${url}</a>${suffix}`;
+  });
 }
 
 function updateBriefText() {
