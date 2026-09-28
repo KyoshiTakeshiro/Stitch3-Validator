@@ -33,6 +33,7 @@ from engagement import warm_avatars as engagement_warm_avatars
 from engagement import warm_cache as engagement_warm_cache
 from legacy_briefs import get_cached_legacy_briefs
 from prompts import generate_brief_evaluation_prompt
+from tweet_lookup import router as tweet_lookup_router
 from update_items import add_item as add_update_item
 from update_items import delete_item as delete_update_item
 from update_items import list_items as list_update_items
@@ -86,6 +87,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(engagement_router, prefix="/api/engagement")
+app.include_router(tweet_lookup_router, prefix="/api/tweet-lookup")
 
 
 async def _warm_engagement_cache_task() -> None:
