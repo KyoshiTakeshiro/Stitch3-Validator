@@ -39,6 +39,25 @@ CABAL_SCALE = 0.9
 STALE_DECAY = 0.5
 
 ALLOWED_ECOSYSTEMS = {"tao", "hyperliquid", "prediction_markets"}
+
+# Host hotkey on every campaign Stitch3 itself runs (verified 2026-09-30
+# against api.stitch3.ai/api/campaigns: all 24 live-era campaigns there use
+# it). A campaign with a *different* hotkey is hosted by someone else (e.g.
+# 125_exploit) and isn't listed on the Stitch3 site.
+STITCH3_HOTKEY = "5E9nKcbR1t1fGSzR7dWsjgziTZbjQv4GTm6FcuFDS7XXfYFi"
+
+
+def is_external_campaign(exclusive_miner_hotkey: Optional[str]) -> bool:
+    return bool(exclusive_miner_hotkey) and exclusive_miner_hotkey != STITCH3_HOTKEY
+
+
+def show_campaign(exclusive_miner_hotkey: Optional[str]) -> bool:
+    """Campaigns hosted outside Stitch3 are hidden everywhere unless
+    SHOW_EXTERNAL_CAMPAIGNS=1 -- set only in the local dev .env so they can be
+    previewed there; the production server leaves it unset."""
+    return not is_external_campaign(exclusive_miner_hotkey) or os.getenv("SHOW_EXTERNAL_CAMPAIGNS") == "1"
+
+
 MANIFEST_TTL = 300
 AVATAR_TTL = 6 * 3600
 
@@ -244,6 +263,10 @@ async def fetch_manifest() -> dict:
             data = resp.json()
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail="Bitcast API is unavailable right now. Try again shortly.") from exc
+    data["campaigns"] = [
+        c for c in data.get("campaigns", [])
+        if show_campaign((c.get("access") or {}).get("exclusive_miner_hotkey"))
+    ]
     _manifest_cache["data"] = data
     _manifest_cache["fetched_at"] = now
     return data
@@ -568,6 +591,7 @@ async def list_campaigns(ecosystem_id: str = "tao"):
             "display": c["display"],
             "opens_at": c["opens_at"],
             "closes_at": c["closes_at"],
+            "external": is_external_campaign((c.get("access") or {}).get("exclusive_miner_hotkey")),
         }
         for c in manifest["campaigns"]
         if ecosystem_id in c["pools"]

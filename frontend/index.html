@@ -687,14 +687,6 @@
     cursor: pointer;
     white-space: nowrap;
   }
-  /* Applied by JS (fitEcosystemTabs) only on narrow screens where the 3
-     pills don't fit on one line at normal size -- shrinks just enough to
-     avoid "Prediction Markets" wrapping to its own line. Screens wide
-     enough to fit the pills at normal size never get these classes. */
-  .ecosystem-tabs.tabs-compact { gap: 6px; }
-  .ecosystem-tabs.tabs-compact .ecosystem-tab { padding: 7px 11px; font-size: 12px; }
-  .ecosystem-tabs.tabs-tight { gap: 4px; }
-  .ecosystem-tabs.tabs-tight .ecosystem-tab { padding: 6px 8px; font-size: 11px; }
   .ecosystem-tab:hover { border-color: var(--border-accent); color: var(--gray-100); }
   .ecosystem-tab.active { background: var(--gradient-brand); background-clip: padding-box; border-color: transparent; color: var(--text-on-brand); }
 
@@ -1030,10 +1022,6 @@
      the summary card, the results table) gets new rules below. */
 
   .mode-tabs { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; margin-bottom: 28px; }
-  .mode-tabs.tabs-compact { gap: 6px; }
-  .mode-tabs.tabs-compact .mode-tab { padding: 7px 10px; min-width: 0; font-size: 11.5px; }
-  .mode-tabs.tabs-tight { gap: 4px; }
-  .mode-tabs.tabs-tight .mode-tab { padding: 6px 7px; min-width: 0; font-size: 10px; }
   .mode-tab {
     position: relative;
     margin-top: 0;
@@ -1068,6 +1056,34 @@
     background: var(--black-1);
     color: var(--purple-light);
     box-shadow: 0 0 0 1px var(--border-accent);
+  }
+
+  /* Phones: every pill in a row is the same size (equal-width grid cells,
+     equal height), instead of shrinking each one to its own text. Text that
+     doesn't fit a cell wraps inside it rather than resizing the pill. */
+  @media (max-width: 520px) {
+    .mode-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+    .mode-tabs .mode-tab {
+      min-width: 0; width: 100%; min-height: 46px; padding: 6px 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px; line-height: 1.25;
+    }
+    .ecosystem-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+    .ecosystem-tabs .ecosystem-tab {
+      width: 100%; min-height: 46px; padding: 6px 8px; text-align: center;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px; line-height: 1.25; white-space: normal;
+    }
+    /* A row carrying the External tag has no room left for "Ends in N days"
+       on a phone; the status badge still says whether it's active. */
+    .select-option:has(.external-tag) .select-option-days,
+    .select-trigger:has(.external-tag) .select-option-days { display: none; }
+  }
+
+  .external-tag {
+    flex-shrink: 0; padding: 1px 7px; border-radius: var(--radius-pill);
+    border: 1px solid var(--border-input); color: var(--gray-400);
+    font-size: 9.5px; letter-spacing: var(--tracking-label); text-transform: uppercase; white-space: nowrap;
   }
 
   /* Purple-tinted dropdown hover, scoped to this panel only -- the existing
@@ -1572,6 +1588,14 @@ const chutesBadgeText = document.getElementById("chutes-badge-text");
 const POOL_LABELS = { tao: "Bittensor", hyperliquid: "Perp DEXs", prediction_markets: "Prediction Markets" };
 const POOL_ORDER = ["tao", "hyperliquid", "prediction_markets"];
 
+// Campaigns hosted by someone other than Stitch3 (see engagement.py's
+// STITCH3_HOTKEY) aren't listed on the Stitch3 site, so they get a small tag.
+function externalTagHtml(item) {
+  return item.external
+    ? `<span class="external-tag" title="Hosted outside Stitch3, so it isn't listed on the Stitch3 site.">External</span>`
+    : "";
+}
+
 let briefs = [];
 let pools = [];
 let selectedPool = null;
@@ -1687,70 +1711,6 @@ async function loadBrandOverviews() {
   }
 }
 
-function fitEcosystemTabs() {
-  // Only bother measuring on narrow screens -- desktop always has room and
-  // this avoids doing layout-thrashing work on every resize on wide viewports.
-  ecosystemTabs.classList.remove("tabs-compact", "tabs-tight");
-  ecosystemTabs.style.flexWrap = "wrap";
-  if (window.innerWidth > 520) return;
-
-  // With flex-wrap: wrap, the browser resolves overflow by wrapping to a
-  // second line, so scrollWidth never exceeds clientWidth and this check
-  // would never fire -- force nowrap first so overflow is actually
-  // measurable, then decide whether shrinking fixes it or it should just
-  // fall back to wrapping after all.
-  ecosystemTabs.style.flexWrap = "nowrap";
-  const fits = () => ecosystemTabs.scrollWidth <= ecosystemTabs.clientWidth + 1;
-  if (fits()) return;
-
-  ecosystemTabs.classList.add("tabs-compact");
-  if (fits()) return;
-
-  ecosystemTabs.classList.add("tabs-tight");
-  if (fits()) return;
-
-  // Still doesn't fit even at the smallest tier (very narrow screen) --
-  // fall back to letting it wrap rather than shrinking illegibly small.
-  ecosystemTabs.classList.remove("tabs-compact", "tabs-tight");
-  ecosystemTabs.style.flexWrap = "wrap";
-}
-
-let fitEcosystemTabsResizeTimer = null;
-window.addEventListener("resize", () => {
-  clearTimeout(fitEcosystemTabsResizeTimer);
-  fitEcosystemTabsResizeTimer = setTimeout(fitEcosystemTabs, 100);
-});
-
-const modeTabsEl = document.getElementById("mode-tabs");
-function fitModeTabs() {
-  // Same shrink-to-fit approach as fitEcosystemTabs -- three static tabs
-  // ("Tweet Validator" / "Engagement Value" / "Coming Soon") at their
-  // normal size are far wider than a phone screen, so on mobile they'd
-  // otherwise stack to three separate lines instead of sitting side by side.
-  modeTabsEl.classList.remove("tabs-compact", "tabs-tight");
-  modeTabsEl.style.flexWrap = "wrap";
-  if (window.innerWidth > 520) return;
-
-  modeTabsEl.style.flexWrap = "nowrap";
-  const fits = () => modeTabsEl.scrollWidth <= modeTabsEl.clientWidth + 1;
-  if (fits()) return;
-
-  modeTabsEl.classList.add("tabs-compact");
-  if (fits()) return;
-
-  modeTabsEl.classList.add("tabs-tight");
-  if (fits()) return;
-
-  modeTabsEl.classList.remove("tabs-compact", "tabs-tight");
-  modeTabsEl.style.flexWrap = "wrap";
-}
-
-let fitModeTabsResizeTimer = null;
-window.addEventListener("resize", () => {
-  clearTimeout(fitModeTabsResizeTimer);
-  fitModeTabsResizeTimer = setTimeout(fitModeTabs, 100);
-});
-
 function renderEcosystemTabs() {
   ecosystemTabs.innerHTML = pools
     .map(p => `<button type="button" class="ecosystem-tab${p === selectedPool ? " active" : ""}" data-pool="${p}">${POOL_LABELS[p] || p}</button>`)
@@ -1763,7 +1723,6 @@ function renderEcosystemTabs() {
       saveState();
     });
   });
-  fitEcosystemTabs();
 }
 
 let filteredBriefs = [];
@@ -1782,7 +1741,7 @@ function renderBriefOptions() {
       const days = daysRemainingText(b);
       return `<div class="select-option${b.id === selectedBriefId ? " selected" : ""}" role="option" data-id="${b.id}" aria-selected="${b.id === selectedBriefId}">
       <span>${b.id}</span>
-      <span class="select-option-meta">${days ? `<span class="select-option-days">${days}</span>` : ""}${statusBadgeHtml(getBriefStatus(b))}</span>
+      <span class="select-option-meta">${externalTagHtml(b)}${days ? `<span class="select-option-days">${days}</span>` : ""}${statusBadgeHtml(getBriefStatus(b))}</span>
     </div>`;
     })
     .join("");
@@ -1810,7 +1769,7 @@ function renderTriggerValue() {
   const brief = filteredBriefs.find(b => b.id === selectedBriefId);
   if (!brief) { selectValue.innerHTML = ""; return; }
   const days = daysRemainingText(brief);
-  selectValue.innerHTML = `<span>${brief.id}</span> ${statusBadgeHtml(getBriefStatus(brief))} ${days ? `<span class="select-option-days">${days}</span>` : ""}`;
+  selectValue.innerHTML = `<span>${brief.id}</span> ${statusBadgeHtml(getBriefStatus(brief))} ${days ? `<span class="select-option-days">${days}</span>` : ""} ${externalTagHtml(brief)}`;
   selectValue.style.cssText = "display:flex;align-items:center;gap:12px;";
 }
 
@@ -2170,7 +2129,6 @@ function loadStats() {
 
 loadBriefs();
 loadStats();
-fitModeTabs();
 
 // Engagement Value Calculator panel, ported from the standalone
 // ~/engagement-value-calculator project. Wrapped in its own IIFE (rather
@@ -2330,7 +2288,7 @@ fitModeTabs();
         const days = daysRemainingText(c);
         return `<div class="select-option" role="option" data-id="${c.id}" aria-selected="${c.id === selectedCampaignId}">
       <span>${c.id}</span>
-      <span class="select-option-meta">${days ? `<span class="select-option-days">${days}</span>` : ""}${statusBadgeHtml(getCampaignStatus(c))}</span>
+      <span class="select-option-meta">${externalTagHtml(c)}${days ? `<span class="select-option-days">${days}</span>` : ""}${statusBadgeHtml(getCampaignStatus(c))}</span>
     </div>`;
       })
       .join("");
@@ -2360,7 +2318,7 @@ fitModeTabs();
     const c = campaigns.find(c => c.id === selectedCampaignId);
     if (!c) { selectValue.innerHTML = ""; return; }
     const days = daysRemainingText(c);
-    selectValue.innerHTML = `<span>${c.id}</span> ${statusBadgeHtml(getCampaignStatus(c))} ${days ? `<span class="select-option-days">${days}</span>` : ""}`;
+    selectValue.innerHTML = `<span>${c.id}</span> ${statusBadgeHtml(getCampaignStatus(c))} ${days ? `<span class="select-option-days">${days}</span>` : ""} ${externalTagHtml(c)}`;
     selectValue.style.cssText = "display:flex;align-items:center;gap:12px;";
   }
 

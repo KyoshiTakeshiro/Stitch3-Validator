@@ -28,6 +28,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from activity_log import hash_ip, log_event, read_events
+from engagement import is_external_campaign, show_campaign
 from engagement import router as engagement_router
 from engagement import warm_avatars as engagement_warm_avatars
 from engagement import warm_cache as engagement_warm_cache
@@ -333,16 +334,14 @@ def _fetch_normalized_briefs() -> list[dict]:
     campaigns = resp.json().get("campaigns", [])
     briefs = []
     for c in campaigns:
-        # "indie_hacker" is a brand-new pool that only ever had one campaign
-        # (078_stitch3, using the new preclaim_v2 mining_protocol, a 1-day
-        # window, and asking creators to review Stitch3 itself) -- it isn't
-        # visible on Bitcast's own website, so it reads as an internal pilot
-        # for the new protocol rather than a real public campaign. Hold this
-        # pool back until it's confirmed live there; remove this filter once
-        # it is.
+        # "indie_hacker" is held back: it isn't an ecosystem shown on the
+        # Stitch3 site, and its campaigns (078_stitch3, 117_testdrive_improve,
+        # 119_stanley) aren't listed there either (checked 2026-09-30).
         if "indie_hacker" in (c.get("pools") or []):
             continue
         access = c.get("access", {})
+        if not show_campaign(access.get("exclusive_miner_hotkey")):
+            continue
         briefs.append({
             "id": access.get("campaign_id"),
             "pool": (c.get("pools") or [None])[0],
@@ -352,10 +351,11 @@ def _fetch_normalized_briefs() -> list[dict]:
             "brief": c.get("brief", ""),
             "tag": c.get("tag"),
             "prompt_version": c.get("prompt_version", 1),
-            # Not consumed by the frontend today -- kept in case exclusive
-            # campaigns (only one specific miner hotkey may submit) ever
-            # need to be filtered out or flagged in the UI.
             "exclusive_miner_hotkey": access.get("exclusive_miner_hotkey"),
+            # Hosted by someone other than Stitch3 (see engagement.
+            # STITCH3_HOTKEY). Only present when SHOW_EXTERNAL_CAMPAIGNS=1
+            # (local preview); the frontend tags these.
+            "external": is_external_campaign(access.get("exclusive_miner_hotkey")),
         })
     return briefs
 
