@@ -1186,8 +1186,7 @@ def evaluate_stream(req: EvaluateRequest, request: Request):
 FRONTEND_DIR = Path(__file__).parent / "frontend"
 
 
-@app.get("/", response_class=HTMLResponse)
-def index():
+def _serve_index() -> HTMLResponse:
     """Serve index.html with the current briefs embedded directly in the
     response, so a first-time (uncached-browser) visitor's very first paint
     already has the data -- no separate client-side /briefs round-trip
@@ -1204,6 +1203,29 @@ def index():
     injected = f"<script>window.__PRELOADED_BRIEFS__ = {json.dumps(briefs)};</script>"
     html = html.replace("<head>", "<head>\n" + injected, 1)
     return HTMLResponse(content=html)
+
+
+# Each tool tab has its own path; they all serve the same page and the
+# frontend picks the tab from location.pathname (see MODE_PATHS there).
+@app.get("/", response_class=HTMLResponse)
+def index(request: Request):
+    # Tweet Score result links used to live at /?tweet=...&eco=... before the
+    # tabs had their own paths -- keep those working.
+    if "tweet" in request.query_params:
+        return RedirectResponse(url=f"/tweet-score?{request.url.query}", status_code=302)
+    return _serve_index()
+
+
+@app.get("/engagement-value", response_class=HTMLResponse)
+@app.get("/engagement-value/", response_class=HTMLResponse, include_in_schema=False)
+def engagement_value_page():
+    return _serve_index()
+
+
+@app.get("/tweet-score", response_class=HTMLResponse)
+@app.get("/tweet-score/", response_class=HTMLResponse, include_in_schema=False)
+def tweet_score_page():
+    return _serve_index()
 
 
 app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")

@@ -2900,31 +2900,50 @@ const MODE_INTRO_LOOKUP = "Enter the URL of any tweet, including ones outside ac
 const poweredByEl = document.getElementById("powered-by-text");
 const POWERED_BY_CHUTES_HTML = poweredByEl.innerHTML;
 const POWERED_BY_DESEARCH_HTML = 'Tweet data by <a href="https://desearch.ai" target="_blank" rel="noopener" class="powered-by-link"><span class="desearch-logo-icon" aria-hidden="true"></span>Desearch</a> for Bitcast-aligned engagement scoring.';
+// Each tab has its own path (main.py serves the same page for all of them).
+const MODE_PATHS = { check: "/", engagement: "/engagement-value", lookup: "/tweet-score" };
+function modeFromPath(pathname) {
+  const clean = pathname.replace(/\/+$/, "") || "/";
+  return Object.keys(MODE_PATHS).find(m => MODE_PATHS[m] === clean) || "check";
+}
+
+function showMode(mode) {
+  modeTabs.forEach(t => t.classList.toggle("active", t.dataset.mode === mode));
+  modeMainCard.style.display = "none";
+  modeEngagementCard.style.display = "none";
+  modeLookupCard.style.display = "none";
+  if (mode === "engagement") {
+    modeEngagementCard.style.display = "";
+    modeIntro.textContent = MODE_INTRO_ENGAGEMENT;
+    modeIntro.style.display = "";
+    window.initEngagementPanel();
+  } else if (mode === "lookup") {
+    modeLookupCard.style.display = "";
+    modeIntro.textContent = MODE_INTRO_LOOKUP;
+    modeIntro.style.display = "";
+  } else {
+    modeMainCard.style.display = "";
+    modeIntro.textContent = MODE_INTRO_CHECK;
+    modeIntro.style.display = "";
+  }
+  poweredByEl.innerHTML = mode === "lookup" ? POWERED_BY_DESEARCH_HTML : POWERED_BY_CHUTES_HTML;
+}
+
 modeTabs.forEach(tab => {
   tab.addEventListener("click", () => {
+    const mode = tab.dataset.mode;
     if (tab.classList.contains("active")) return;
-    modeTabs.forEach(t => t.classList.remove("active"));
-    tab.classList.add("active");
-    modeMainCard.style.display = "none";
-    modeEngagementCard.style.display = "none";
-    modeLookupCard.style.display = "none";
-    if (tab.dataset.mode === "engagement") {
-      modeEngagementCard.style.display = "";
-      modeIntro.textContent = MODE_INTRO_ENGAGEMENT;
-      modeIntro.style.display = "";
-      window.initEngagementPanel();
-    } else if (tab.dataset.mode === "lookup") {
-      modeLookupCard.style.display = "";
-      modeIntro.textContent = MODE_INTRO_LOOKUP;
-      modeIntro.style.display = "";
-    } else {
-      modeMainCard.style.display = "";
-      modeIntro.textContent = MODE_INTRO_CHECK;
-      modeIntro.style.display = "";
-    }
-    poweredByEl.innerHTML = tab.dataset.mode === "lookup" ? POWERED_BY_DESEARCH_HTML : POWERED_BY_CHUTES_HTML;
+    showMode(mode);
+    // Back to Tweet Score keeps its result link (?tweet=...) if one is showing.
+    const query = mode === "lookup" && window.lookupShareQuery ? window.lookupShareQuery() : "";
+    history.pushState({ mode }, "", MODE_PATHS[mode] + query);
   });
 });
+
+window.addEventListener("popstate", () => showMode(modeFromPath(location.pathname)));
+
+// Open the tab the URL points at (e.g. /tweet-score) on first load.
+if (modeFromPath(location.pathname) !== "check") showMode(modeFromPath(location.pathname));
 
 // Prefetch the Engagement Value tab's leaderboard/avatar-heavy results on
 // hover or keyboard focus of its own tab button, not on page load -- most
@@ -3002,13 +3021,21 @@ if (engagementTabButton) {
     });
   });
 
-  function shareUrl(data) {
-    const params = new URLSearchParams({ tweet: data.tweet_id, eco: data.ecosystem_id });
-    return `${location.origin}${location.pathname}?${params}`;
+  function shareQuery(data) {
+    return `?${new URLSearchParams({ tweet: data.tweet_id, eco: data.ecosystem_id })}`;
   }
 
+  function shareUrl(data) {
+    return `${location.origin}${MODE_PATHS.lookup}${shareQuery(data)}`;
+  }
+
+  // Used when switching back to this tab, to restore the result's link.
+  window.lookupShareQuery = () => (lastData ? shareQuery(lastData) : "");
+
+  // Only touches the address bar while this tab is the open one.
   function setShareParams(data) {
-    history.replaceState(null, "", data ? shareUrl(data) : location.pathname);
+    if (modeFromPath(location.pathname) !== "lookup") return;
+    history.replaceState(history.state, "", MODE_PATHS.lookup + (data ? shareQuery(data) : ""));
   }
 
   function renderEngagerRows(engagers) {
@@ -3170,6 +3197,7 @@ if (engagementTabButton) {
       if (seq !== lookupSeq) return;
       lastData = null;
       resultEl.innerHTML = "";
+      setShareParams(null);
       errorEl.textContent = e.message || "Something went wrong while checking that tweet. Please try again.";
     } finally {
       if (seq === lookupSeq) {
@@ -3191,19 +3219,13 @@ if (engagementTabButton) {
     setShareParams(null);
   }
 
-  // Keep ?tweet= in the address bar only while Tweet Score is showing that
-  // result, so a reload on another tab doesn't jump back here.
-  document.querySelectorAll(".mode-tab").forEach(tab => {
-    tab.addEventListener("click", () => setShareParams(tab.dataset.mode === "lookup" ? lastData : null));
-  });
-
   function openSharedLink() {
+    if (modeFromPath(location.pathname) !== "lookup") return;
     const params = new URLSearchParams(location.search);
     const tweetId = params.get("tweet");
     if (!tweetId || !/^\d+$/.test(tweetId)) return;
     const eco = params.get("eco");
     if (eco) setEcosystem(eco);
-    document.querySelector('.mode-tab[data-mode="lookup"]').click();
     urlInput.value = `https://x.com/i/status/${tweetId}`;
     urlClearBtn.style.display = "flex";
     runLookup();
