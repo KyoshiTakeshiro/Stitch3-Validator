@@ -2,8 +2,8 @@
 Bitcast X pre-submission validator — FastAPI backend.
 
 Lets a creator paste a draft tweet + pick an active campaign brief and get an
-instant pass/fail verdict, replicating the same LLM evaluation logic and
-optimistic multi-check strategy that real Bitcast validators use.
+instant pass/fail verdict, replicating the JEV brief evaluation (via OpenRouter)
+that real Bitcast validators use -- see jev.py.
 """
 
 import hashlib
@@ -14,7 +14,7 @@ import os
 import secrets
 import time
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Lock
 
@@ -22,7 +22,7 @@ import requests
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -33,7 +33,7 @@ from engagement import router as engagement_router
 from engagement import warm_avatars as engagement_warm_avatars
 from engagement import warm_cache as engagement_warm_cache
 from legacy_briefs import get_cached_legacy_briefs
-from prompts import generate_brief_evaluation_prompt
+from jev import cached_result, evaluate_brief
 from tweet_lookup import router as tweet_lookup_router
 from update_items import add_item as add_update_item
 from update_items import delete_item as delete_update_item
@@ -51,10 +51,6 @@ BITCAST_CAMPAIGN_MANIFEST_ENDPOINT = "https://bitcast-api.bitcast.network/api/v2
 # any Bitcast API -- if this one disappears too, re-check where their
 # campaign pages link brand briefs from.
 BRAND_OVERVIEW_BASE_URL = "https://brands.bitcast.network"
-CHUTES_ENDPOINT = "https://llm.chutes.ai/v1/chat/completions"
-CHUTES_API_KEY = os.getenv("CHUTES_API_KEY")
-NUM_LLM_CHECKS = 3
-MODEL = "Qwen/Qwen3-32B"
 
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
@@ -117,14 +113,20 @@ async def _warm_engagement_cache_on_startup() -> None:
 
     asyncio.create_task(_warm_engagement_cache_task())
 
-# /evaluate and /evaluate/stream are the only endpoints that spend real money
-# (each check is a Chutes API call against our own key) -- /briefs and the
+# /evaluate is the only endpoint that spends real money
+# (each check is a JEV call on OpenRouter against our own key) -- /briefs and the
 # brand-overview lookups are cheap/cached and don't need this. In-memory,
-# per-process fixed-window limiter: fine for this single-instance deployment,
+# per-process sliding-window limiter: fine for this single-instance deployment,
 # same tradeoff as the existing _briefs_cache/_overview_cache dicts below.
-RATE_LIMIT_WINDOW = 60  # seconds
-RATE_LIMIT_MAX_REQUESTS = 5  # per IP, per window
+# Sized from real traffic (VPS activity log, 2026-10-14: 1,332 checks from 203
+# IPs; busiest hour 18 checks across everyone, fastest single IP 2 per minute),
+# so these sit well above anything seen. Only checks that actually call JEV
+# count -- a repeat of an unchanged draft is served from cache and is free.
+RATE_LIMIT_PER_IP_MINUTE = 3
+RATE_LIMIT_PER_IP_HOUR = 25
+RATE_LIMIT_GLOBAL_HOUR = 100
 _rate_limit_hits: dict[str, list[float]] = {}
+_rate_limit_global_hits: list[float] = []
 _rate_limit_lock = Lock()
 
 
@@ -138,20 +140,35 @@ def _client_ip(request: Request) -> str:
 
 
 def _enforce_rate_limit(request: Request) -> None:
+    """Raise 429 if this uncached check would exceed a limit, else record it."""
     ip = _client_ip(request)
     now = time.time()
-    cutoff = now - RATE_LIMIT_WINDOW
     with _rate_limit_lock:
-        hits = [t for t in _rate_limit_hits.get(ip, []) if t > cutoff]
-        if len(hits) >= RATE_LIMIT_MAX_REQUESTS:
-            retry_after = int(hits[0] - cutoff) + 1
+        hits = [t for t in _rate_limit_hits.get(ip, []) if t > now - 3600]
+        global_hits = [t for t in _rate_limit_global_hits if t > now - 3600]
+        _rate_limit_global_hits[:] = global_hits
+        recent = [t for t in hits if t > now - 60]
+        if len(recent) >= RATE_LIMIT_PER_IP_MINUTE:
             raise HTTPException(
                 status_code=429,
                 detail="Too many checks in a short time — please wait a bit before trying again.",
-                headers={"Retry-After": str(retry_after)},
+                headers={"Retry-After": str(int(recent[0] - (now - 60)) + 1)},
+            )
+        if len(hits) >= RATE_LIMIT_PER_IP_HOUR:
+            raise HTTPException(
+                status_code=429,
+                detail="You've reached the hourly limit for checks — please try again a bit later.",
+                headers={"Retry-After": str(int(hits[0] - (now - 3600)) + 1)},
+            )
+        if len(global_hits) >= RATE_LIMIT_GLOBAL_HOUR:
+            raise HTTPException(
+                status_code=429,
+                detail="The tool is very busy right now — please try again in a few minutes.",
+                headers={"Retry-After": str(int(global_hits[0] - (now - 3600)) + 1)},
             )
         hits.append(now)
         _rate_limit_hits[ip] = hits
+        global_hits.append(now)
 
 
 class EvaluateRequest(BaseModel):
@@ -159,157 +176,11 @@ class EvaluateRequest(BaseModel):
     tweet: str
 
 
-class CheckResult(BaseModel):
-    verdict: str
-    summary: str
-    raw_response: str
-
-
 class EvaluateResponse(BaseModel):
     meets_brief: bool
-    checks: list[CheckResult]
+    reasons: list[str]
     prompt_version: int
     brief_display: str
-
-
-def parse_verdict(text: str) -> tuple[str, str]:
-    """Extract the YES/NO verdict and one-sentence summary from a model response."""
-    verdict = "NO"
-    summary = ""
-
-    if "## Verdict" in text:
-        after_verdict = text.split("## Verdict", 1)[1]
-        verdict_line = after_verdict.strip().splitlines()[0].strip()
-        if "YES" in verdict_line.upper():
-            verdict = "YES"
-
-    if "## Summary" in text:
-        summary = text.split("## Summary", 1)[1].strip()
-        if summary.endswith("```"):
-            summary = summary[:-3].strip()
-
-    return verdict, summary
-
-
-# How congested Chutes' shared compute currently is, inferred from call
-# latencies within the *current evaluation only* -- Chutes has no public
-# per-model load/utilization API we can query (checked their docs: the only
-# utilization endpoints are miner-side and need miner auth), so this is
-# self-measured from real traffic rather than borrowed from an official
-# metric. Deliberately scoped per-request (a plain list threaded through the
-# call chain) rather than a shared global window: a process-wide window mixes
-# in stale samples from other visitors' evaluations and from attempts made
-# minutes ago, which showed up as a misleading "slower than usual" badge
-# during a run that was actually fast throughout. Records every individual
-# HTTP attempt's wall time (not counting backoff sleeps), so a timeout
-# naturally shows up as a ~60s sample -- exactly the signal we want.
-def chutes_congestion_state(samples: list[float]) -> dict:
-    """4-state read on Chutes responsiveness so far in this evaluation, based
-    on the average of its own call attempts. Thresholds are calibrated
-    around this project's own documented baseline (~30-45s is normal for a
-    single call on Chutes' shared/decentralized compute, not fast) -- not
-    generic web-latency assumptions."""
-    if len(samples) < 1:
-        return {"state": "unknown", "avg_latency": None, "samples": len(samples)}
-
-    avg = sum(samples) / len(samples)
-    if avg < 15:
-        state = "fast"
-    elif avg < 35:
-        state = "normal"
-    elif avg < 55:
-        state = "slow"
-    else:
-        state = "congested"
-    return {"state": state, "avg_latency": round(avg, 1), "samples": len(samples)}
-
-
-def call_chutes(prompt: str, latencies: list[float]) -> str:
-    """Call Chutes' chat completions endpoint, matching the real validator's
-    ChuteClient. `latencies` is the calling evaluation's own list (see above)
-    -- list.append() is atomic under the GIL, so concurrent checks sharing it
-    from separate threads need no extra lock."""
-    headers = {
-        "Authorization": f"Bearer {CHUTES_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0,
-        "max_tokens": 4096,
-    }
-
-    # A 429 means Chutes is actively telling us to slow down -- retrying in
-    # 1-2s (the normal backoff, meant for transient timeouts/connection
-    # blips) just gets rejected again. Back off longer specifically for
-    # that case. No Retry-After handling yet -- unconfirmed whether Chutes
-    # sends that header; revisit if/when that's checked against a real 429.
-    RATE_LIMIT_BACKOFF_SECONDS = 8
-
-    last_error = None
-    for attempt in range(3):
-        start = time.time()
-        try:
-            resp = requests.post(CHUTES_ENDPOINT, headers=headers, json=payload, timeout=60)
-            resp.raise_for_status()
-            latencies.append(time.time() - start)
-            return resp.json()["choices"][0]["message"]["content"]
-        except Exception as e:
-            latencies.append(time.time() - start)
-            last_error = e
-            if attempt < 2:
-                is_rate_limited = (
-                    isinstance(e, requests.HTTPError)
-                    and e.response is not None
-                    and e.response.status_code == 429
-                )
-                time.sleep(RATE_LIMIT_BACKOFF_SECONDS if is_rate_limited else 2 ** attempt)
-    raise last_error
-
-
-def run_single_check(
-    brief: dict, tweet: str, prompt_version: int, check_num: int, latencies: list[float]
-) -> CheckResult:
-    # Real validator appends " {check_num}" to bust its LLM cache so each of the
-    # NUM_LLM_CHECKS runs is an independent judgment rather than a repeat of the
-    # same deterministic (temperature=0) response. Replicated here for the same
-    # reason: without it, our "best of 3" carries far less real variance.
-    variant_tweet = f"{tweet} {check_num}"
-    prompt = generate_brief_evaluation_prompt(brief, variant_tweet, version=prompt_version)
-    text = call_chutes(prompt, latencies)
-    verdict, summary = parse_verdict(text)
-    return CheckResult(verdict=verdict, summary=summary, raw_response=text)
-
-
-def run_checks_pessimistic(brief: dict, tweet: str, prompt_version: int):
-    """Yield (CheckResult, chutes_state) as each check completes, stopping at
-    the first NO. chutes_state reflects only this evaluation's own call
-    attempts so far (see chutes_congestion_state above), not other traffic.
-
-    Deliberately stricter than the real validator's own optimistic
-    (any-YES-wins) best-of-3: a single NO here already means meets_brief
-    can never be True, so there's no reason to reduce this to a numeric
-    score -- the caller just needs every yielded check to be YES, and
-    needs to see all NUM_LLM_CHECKS of them, for the tweet to pass. This
-    makes our checker harder to satisfy than the real validator, on
-    purpose -- see project notes for why (false positives here are far
-    more costly to a miner than false negatives).
-    """
-    latencies: list[float] = []
-    executor = ThreadPoolExecutor(max_workers=NUM_LLM_CHECKS)
-    futures = [
-        executor.submit(run_single_check, brief, tweet, prompt_version, check_num, latencies)
-        for check_num in range(1, NUM_LLM_CHECKS + 1)
-    ]
-    try:
-        for future in as_completed(futures):
-            result = future.result()
-            yield result, chutes_congestion_state(latencies)
-            if result.verdict != "YES":
-                break
-    finally:
-        executor.shutdown(wait=False)
 
 
 def _fetch_normalized_briefs() -> list[dict]:
@@ -446,7 +317,7 @@ def _get_cached_briefs() -> list[dict]:
     precedence on an id collision (070_verathos through 074_nodexo appear
     in both -- the live manifest's copy is the fresher one). This is the
     one list every consumer reads (this endpoint's campaign selector,
-    _lookup_brief for /evaluate and /evaluate/stream, and
+    _lookup_brief for /evaluate, and
     /briefs/brand-overviews' HEAD-check fan-out below), so a legacy
     campaign works exactly like a live one everywhere in this app -- no
     separate "legacy brief" code path to keep in sync."""
@@ -1068,25 +939,26 @@ def admin_checks(page: int = 1):
 
 @app.post("/evaluate", response_model=EvaluateResponse)
 def evaluate(req: EvaluateRequest, request: Request):
-    _enforce_rate_limit(request)
     brief = _lookup_brief(req.brief_id)
     prompt_version = brief.get("prompt_version", 1)
+    # Cache hits cost nothing, so they skip the limiter entirely.
+    if cached_result(brief, req.tweet) is None:
+        _enforce_rate_limit(request)
 
     try:
-        checks = [result for result, _ in run_checks_pessimistic(brief, req.tweet, prompt_version)]
+        result = evaluate_brief(brief, req.tweet)
     except Exception:
-        # call_chutes() already retries 3x internally -- reaching here means
-        # Chutes itself is timing out/erroring past that budget. Surface a
-        # real explanation instead of letting the raw exception 500 out.
-        # Log it too -- this used to be swallowed with zero server-side
-        # trace, making a real Chutes-side failure indistinguishable from
-        # "never happened" when checking journalctl after the fact.
+        # evaluate_brief() already retries 3x internally -- reaching here
+        # means OpenRouter/JEV itself is timing out/erroring past that
+        # budget (or the key is missing). Surface a real explanation instead
+        # of letting the raw exception 500 out, and log it: uvicorn's access
+        # log only shows the 502, not why.
         LOGGER.exception("evaluate() failed for brief=%s", req.brief_id)
         raise HTTPException(
             status_code=502,
             detail="The evaluation service is currently slow or unavailable. Please try again in a moment.",
         )
-    meets_brief = len(checks) == NUM_LLM_CHECKS and all(c.verdict == "YES" for c in checks)
+    meets_brief = result["meets_brief"]
     _record_check(_client_ip(request), meets_brief)
     log_event(
         "tweet_check",
@@ -1097,89 +969,9 @@ def evaluate(req: EvaluateRequest, request: Request):
 
     return EvaluateResponse(
         meets_brief=meets_brief,
-        checks=checks,
+        reasons=result["reasons"],
         prompt_version=prompt_version,
         brief_display=brief.get("display", brief.get("brief", "")),
-    )
-
-
-@app.post("/evaluate/stream")
-def evaluate_stream(req: EvaluateRequest, request: Request):
-    """SSE variant of /evaluate: emits a "check" event as each of the (up to
-    NUM_LLM_CHECKS) checks completes, then a final "done" event with the
-    same shape as EvaluateResponse. Lets the frontend show real per-check
-    progress during the pessimistic (must-pass-all-3) wait instead of a
-    static "please wait" message."""
-    _enforce_rate_limit(request)
-    brief = _lookup_brief(req.brief_id)
-    prompt_version = brief.get("prompt_version", 1)
-
-    def event_stream():
-        checks: list[CheckResult] = []
-        try:
-            for result, chutes_state in run_checks_pessimistic(brief, req.tweet, prompt_version):
-                checks.append(result)
-                payload = {
-                    "type": "check",
-                    "index": len(checks),
-                    "verdict": result.verdict,
-                    "chutes_state": chutes_state["state"],
-                    "chutes_avg_latency": chutes_state["avg_latency"],
-                }
-                yield f"data: {json.dumps(payload)}\n\n"
-        except Exception:
-            # SSE headers are already sent by this point, so a real error
-            # can't be raised as an HTTP status -- emit it as its own event
-            # instead. call_chutes() already retries 3x internally, so
-            # reaching here means Chutes itself is timing out/erroring past
-            # that budget, not a transient blip. Without this, the raw
-            # exception used to crash the stream silently and the frontend
-            # fell back to a generic "took too long" message that hid the
-            # real cause. Also log it -- uvicorn's access log shows this
-            # request as a plain "200 OK" either way (the SSE stream itself
-            # succeeded even though a check inside it failed), so without an
-            # explicit log line here there was zero server-side trace of
-            # which requests actually failed internally.
-            LOGGER.exception("evaluate_stream() failed for brief=%s", req.brief_id)
-            error_payload = {
-                "type": "error",
-                "detail": "The evaluation service is currently slow or unavailable. Please try again in a moment.",
-            }
-            yield f"data: {json.dumps(error_payload)}\n\n"
-            return
-
-        meets_brief = len(checks) == NUM_LLM_CHECKS and all(c.verdict == "YES" for c in checks)
-        _record_check(_client_ip(request), meets_brief)
-        log_event(
-            "tweet_check",
-            brief_id=req.brief_id,
-            verdict="YES" if meets_brief else "NO",
-            ip_hash=hash_ip(_client_ip(request)),
-        )
-        final = {
-            "type": "done",
-            "meets_brief": meets_brief,
-            "checks": [c.model_dump() for c in checks],
-            "prompt_version": prompt_version,
-            "brief_display": brief.get("display", brief.get("brief", "")),
-        }
-        yield f"data: {json.dumps(final)}\n\n"
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            # Tells nginx not to buffer the response before forwarding it --
-            # without this, a reverse proxy can hold the whole SSE stream
-            # until the generator finishes, so the frontend receives every
-            # "check" event and the final "done" event in one burst instead
-            # of progressively. (Still requires `proxy_buffering off;` in
-            # the actual nginx config on the VPS for this header to take
-            # effect there -- see deploy notes.)
-            "X-Accel-Buffering": "no",
-        },
     )
 
 

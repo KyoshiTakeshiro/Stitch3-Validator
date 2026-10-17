@@ -635,23 +635,7 @@
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  .check-progress { display: flex; align-items: center; gap: 6px; margin-top: 10px; margin-left: 26px; }
-  .check-dot {
-    width: 20px; height: 20px;
-    border-radius: 50%;
-    border: 1.5px solid var(--border-input);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 11px;
-    color: var(--gray-500);
-    transition: border-color 0.2s, background 0.2s, color 0.2s;
-  }
-  .check-dot svg { width: 11px; height: 11px; }
-  .check-dot.pending { animation: pulse 1.1s ease-in-out infinite; }
   @keyframes pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
-  .check-dot.pass { border-color: #34d39966; background: #34d3990f; color: var(--green); }
-  .check-dot.fail { border-color: #f8717166; background: #f871710f; color: var(--red); }
-  .check-dot.skipped { opacity: 0.3; }
-
   #result:not(:empty) { margin-top: 24px; }
   .verdict {
     display: flex;
@@ -665,13 +649,11 @@
   .verdict-row { display: flex; align-items: center; gap: 10px; font-family: var(--font-display); font-weight: 700; font-size: 15px; }
   .verdict-label { display: inline-flex; align-items: center; gap: 8px; }
   .verdict-label svg { flex-shrink: 0; }
-  .verdict .count { font-family: var(--font-mono); font-weight: 500; font-size: 12px; opacity: 0.75; }
-  .verdict-disclaimer { font-family: var(--font-body); font-weight: 400; font-size: 13px; line-height: 1.5; opacity: 0.85; }
   .pass { background: #34d3990f; border: 1px solid #34d39966; color: var(--green); }
   .fail { background: #f871710f; border: 1px solid #f8717166; color: var(--red); }
   .reason { margin-top: 12px; font-size: 13.5px; color: var(--gray-400); line-height: 1.6; }
-  .variance-note { margin-top: 10px; font-size: 12.5px; color: var(--gray-500); line-height: 1.5; }
-  #loading .variance-note { margin-left: 26px; }
+  .reasons { margin: 12px 0 0; padding-left: 18px; font-size: 13.5px; color: var(--gray-400); line-height: 1.6; }
+  .reasons li + li { margin-top: 6px; }
 
   .ecosystem-tabs { display: flex; gap: 8px; flex-wrap: wrap; }
   .ecosystem-tab {
@@ -706,23 +688,6 @@
   .status-active .status-dot { background: var(--green); box-shadow: 0 0 6px #34d399aa; }
   .status-completed { color: var(--gray-500); }
   .status-completed .status-dot { background: var(--gray-500); }
-
-  /* Chutes congestion badge -- self-measured from our own recent call
-     latencies (Chutes has no public per-model load API), shown during
-     validation since Chutes' shared/decentralized compute is the single
-     biggest factor in how long a check takes. */
-  .chutes-badge { margin-left: 8px; font-size: 10px; }
-  .chutes-badge .status-dot { animation: pulse 1.1s ease-in-out infinite; }
-  .chutes-badge.status-unknown { color: var(--gray-500); }
-  .chutes-badge.status-unknown .status-dot { background: var(--gray-500); }
-  .chutes-badge.status-fast { color: var(--green); }
-  .chutes-badge.status-fast .status-dot { background: var(--green); box-shadow: 0 0 6px #34d399aa; }
-  .chutes-badge.status-normal { color: var(--purple-light); }
-  .chutes-badge.status-normal .status-dot { background: var(--purple); box-shadow: 0 0 6px #b882ff99; }
-  .chutes-badge.status-slow { color: var(--amber); }
-  .chutes-badge.status-slow .status-dot { background: var(--amber); box-shadow: 0 0 6px #fbbf24aa; }
-  .chutes-badge.status-congested { color: var(--red); }
-  .chutes-badge.status-congested .status-dot { background: var(--red); box-shadow: 0 0 6px #f87171aa; }
 
   .select-wrap { position: relative; }
   .select-trigger {
@@ -1403,15 +1368,7 @@
     <button id="evaluate-btn">Check against brief</button>
 
     <div id="loading" style="display:none;">
-      <div class="loading-row"><span class="spinner"></span><span id="loading-text">Running validation. This can take up to a minute…</span></div>
-      <div class="check-progress" id="check-progress">
-        <span class="check-dot pending" data-idx="1"></span>
-        <span class="check-dot pending" data-idx="2"></span>
-        <span class="check-dot pending" data-idx="3"></span>
-        <span id="chutes-badge" class="status-badge chutes-badge" style="display:none;">
-          <span class="status-dot"></span><span id="chutes-badge-text"></span>
-        </span>
-      </div>
+      <div class="loading-row"><span class="spinner"></span><span id="loading-text">Checking your tweet…</span></div>
     </div>
     <div id="result"></div>
   </div>
@@ -1476,13 +1433,13 @@
   </div>
 
   <footer class="site-footer">
-    <p class="powered-by" id="powered-by-text">Inference by <a href="https://chutes.ai" target="_blank" rel="noopener" class="powered-by-link"><svg width="62" height="41" viewBox="0 0 62 41" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M38.01 39.6943C37.1263 41.1364 35.2525 41.4057 34.0442 40.2642L28.6738 35.1904C27.4656 34.049 27.4843 32.0273 28.7133 30.9115L34.1258 25.9979C40.1431 20.5352 48.069 18.406 55.6129 20.2255L59.6853 21.2078C59.8306 21.2428 59.9654 21.3165 60.0771 21.422C60.6663 21.9787 60.3364 23.0194 59.552 23.078L59.465 23.0845C52.0153 23.6409 45.1812 27.9913 40.9759 34.8542L38.01 39.6943Z" fill="currentColor"></path><path d="M15.296 36.5912C14.1726 37.8368 12.2763 37.7221 11.2913 36.349L0.547139 21.3709C-0.432786 20.0048 -0.0547272 18.0273 1.34794 17.1822L22.7709 4.27482C29.6029 0.158495 37.7319 -0.277291 44.8086 3.0934L60.3492 10.4956C60.5897 10.6101 60.7997 10.7872 60.9599 11.0106C61.8149 12.2025 60.8991 13.9056 59.5058 13.7148L50.2478 12.4467C42.8554 11.4342 35.4143 14.2848 30.1165 20.1587L15.296 36.5912Z" fill="currentColor"></path></svg>Chutes</a> with Qwen3-32B for Bitcast-aligned tweet validation.</p>
+    <p class="powered-by" id="powered-by-text">Powered by TypeSafe JEV for Bitcast-aligned tweet validation.</p>
     <p>Built by <a href="https://x.com/KyoshiTakeshiro" target="_blank" rel="noopener">Kyoshi Takeshiro</a>.<br><button type="button" class="tiptao-trigger" id="tiptao-trigger">Buy me a coffee</button> on <a href="https://www.tiptao.io" target="_blank" rel="noopener">TipTAO</a> ☕️</p>
     <div class="footer-meta-row">
       <a href="https://github.com/KyoshiTakeshiro/Stitch3-Validator" target="_blank" rel="noopener" class="footer-github-link" aria-label="View source on GitHub">
         <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
       </a>
-      <span class="version-tag" id="version-tag" title="Validator logic version">v3.0</span>
+      <span class="version-tag" id="version-tag" title="Validator logic version">v4.0</span>
     </div>
   </footer>
 </div>
@@ -1581,9 +1538,6 @@ const evaluateBtn = document.getElementById("evaluate-btn");
 const resultDiv = document.getElementById("result");
 const loadingDiv = document.getElementById("loading");
 const loadingText = document.getElementById("loading-text");
-const checkDots = Array.from(document.querySelectorAll(".check-dot"));
-const chutesBadge = document.getElementById("chutes-badge");
-const chutesBadgeText = document.getElementById("chutes-badge-text");
 
 const POOL_LABELS = { tao: "Bittensor", hyperliquid: "Perp DEXs", prediction_markets: "Prediction Markets" };
 const POOL_ORDER = ["tao", "hyperliquid", "prediction_markets"];
@@ -1679,7 +1633,7 @@ async function loadBriefs() {
       tweetInput.value = saved.tweet;
       autoResizeTweetInput();
     }
-    if (saved && saved.lastResult && saved.tweet && saved.tweet.trim() && saved.selectedBriefId === selectedBriefId) {
+    if (saved && saved.lastResult && Array.isArray(saved.lastResult.reasons) && saved.tweet && saved.tweet.trim() && saved.selectedBriefId === selectedBriefId) {
       lastResult = saved.lastResult;
       renderResult(lastResult);
     }
@@ -1889,64 +1843,6 @@ resultDiv.addEventListener("click", (e) => {
   window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(tweet)}`, "_blank", "noopener");
 });
 
-const CHECK_DOT_PASS = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
-const CHECK_DOT_FAIL = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
-
-function resetCheckDots() {
-  checkDots.forEach(dot => {
-    dot.className = "check-dot pending";
-    dot.innerHTML = "";
-  });
-  loadingText.textContent = "Running validation 1 of 3…";
-}
-
-const CHUTES_STATUS_LABELS = {
-  fast: "Chutes: responding fast",
-  normal: "Chutes: responding normally",
-  slow: "Chutes: slower than usual",
-  congested: "Chutes: congested right now",
-  unknown: "Chutes: measuring response time…",
-};
-
-function updateChutesBadge(state) {
-  chutesBadge.className = `status-badge chutes-badge status-${state}`;
-  chutesBadgeText.textContent = CHUTES_STATUS_LABELS[state] || state;
-  chutesBadge.style.display = "inline-flex";
-}
-
-function resetChutesBadge() {
-  // Show the neutral "measuring" state immediately, since the first real
-  // reading only arrives once this evaluation's own first check completes
-  // (see backend chutes_congestion_state -- it's scoped to this run's own
-  // call attempts, not a shared/global window, so there's nothing to show
-  // before that).
-  updateChutesBadge("unknown");
-}
-
-function updateCheckDots(index, verdict) {
-  const dot = checkDots[index - 1];
-  if (!dot) return;
-  if (verdict === "YES") {
-    dot.className = "check-dot pass";
-    dot.innerHTML = CHECK_DOT_PASS;
-    if (index < checkDots.length) {
-      loadingText.textContent = `Validation ${index} of 3 passed. Running validation ${index + 1}…`;
-    } else {
-      loadingText.textContent = "All 3 validations passed.";
-    }
-  } else {
-    dot.className = "check-dot fail";
-    dot.innerHTML = CHECK_DOT_FAIL;
-    loadingText.textContent = `Validation ${index} of 3 failed — stopping early.`;
-    // Pessimistic scoring: one failed check already dooms the verdict, so
-    // any checks that hadn't started yet were never run. Mark them as
-    // skipped rather than leaving them pulsing forever.
-    for (let i = index; i < checkDots.length; i++) {
-      checkDots[i].className = "check-dot skipped";
-    }
-  }
-}
-
 async function runEvaluation() {
   const tweet = tweetInput.value.trim();
   const briefId = selectedBriefId;
@@ -1955,11 +1851,9 @@ async function runEvaluation() {
   evaluateBtn.disabled = true;
   loadingDiv.style.display = "flex";
   resultDiv.innerHTML = "";
-  resetCheckDots();
-  resetChutesBadge();
 
   try {
-    const resp = await fetch("/evaluate/stream", {
+    const resp = await fetch("/evaluate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ brief_id: briefId, tweet }),
@@ -1976,65 +1870,21 @@ async function runEvaluation() {
       }
       throw new Error(detail);
     }
-
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let finalData = null;
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const parts = buffer.split("\n\n");
-      buffer = parts.pop();
-      for (const part of parts) {
-        if (!part.startsWith("data: ")) continue;
-        const payload = JSON.parse(part.slice(6));
-        if (payload.type === "check") {
-          updateCheckDots(payload.index, payload.verdict);
-          updateChutesBadge(payload.chutes_state);
-          // A proxy/buffer between us and the server can deliver several
-          // events in one burst instead of as they actually happen -- when
-          // that happens, this loop processes them synchronously and the
-          // browser never gets a chance to paint the intermediate dot
-          // states before the final result overwrites them (reported as
-          // "dots never fill in, it just jumps to the result"). Forcing a
-          // brief pause after each dot update guarantees it's actually
-          // visible on screen, regardless of how bunched up the delivery
-          // was.
-          await new Promise(resolve => setTimeout(resolve, 350));
-        } else if (payload.type === "done") {
-          finalData = payload;
-        } else if (payload.type === "error") {
-          // A real backend failure (e.g. Chutes itself timing out) surfaced
-          // mid-stream -- this has an actual detail string, unlike a raw
-          // dropped connection, so show it verbatim rather than falling
-          // back to the generic network-failure message.
-          throw new Error(payload.detail);
-        }
-      }
-    }
-
-    if (!finalData) throw new Error("Evaluation failed");
-    lastResult = finalData;
-    renderResult(finalData);
+    const data = await resp.json();
+    lastResult = data;
+    renderResult(data);
     saveState();
   } catch (e) {
     // Only errors we explicitly threw with a real server-provided detail
     // (the 429 rate-limit notice, or another JSON error body) get shown
     // verbatim -- those are plain Error instances from the `throw new
-    // Error(detail)` path above. Anything else -- a raw TypeError from
-    // fetch() itself (e.g. "Failed to fetch" / "NetworkError when
-    // attempting to fetch resource." from a mid-stream connection drop), a
-    // SyntaxError from JSON.parse on a truncated SSE chunk, or our own
-    // "Evaluation failed" sentinel -- has no user-friendly wording of its
-    // own, so show the generic retry message instead of leaking raw
-    // browser/parser text.
+    // Error(detail)` path above. Anything else (a raw TypeError from
+    // fetch(), our own "Evaluation failed" sentinel) has no user-friendly
+    // wording, so show the generic retry message instead.
     const isServerDetail = e instanceof Error && e.constructor === Error && e.message !== "Evaluation failed";
     const message = isServerDetail
       ? e.message
-      : "Something went wrong while checking your tweet. The check may have taken too long. Please try again.";
+      : "Something went wrong while checking your tweet. Please try again.";
     resultDiv.innerHTML = `
       <div class="verdict fail">${message}</div>
       <button type="button" class="retry-btn">Try again</button>
@@ -2050,40 +1900,21 @@ evaluateBtn.addEventListener("click", runEvaluation);
 
 const VERDICT_ICON_PASS = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`;
 const VERDICT_ICON_FAIL = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`;
-const NUM_CHECKS = 3;
 
 function renderResult(data) {
-  const passCount = data.checks.filter(c => c.verdict === "YES").length;
   const verdictClass = data.meets_brief ? "pass" : "fail";
   const verdictIcon = data.meets_brief ? VERDICT_ICON_PASS : VERDICT_ICON_FAIL;
   const verdictText = data.meets_brief ? "Meets brief" : "Does not meet brief";
-  // Pessimistic scoring (all NUM_CHECKS must be YES) short-circuits on the
-  // first NO, so a fail can arrive with fewer than NUM_CHECKS checks run --
-  // the true denominator is only known once we actually have all of them.
-  const hasFullCount = data.checks.length === NUM_CHECKS;
-  const countHtml = hasFullCount ? ` <span class="count">${passCount}/${NUM_CHECKS} checks passed</span>` : "";
 
-  const brief = briefs.find(b => b.id === selectedBriefId);
-  let disclaimerHtml = "";
-  if (data.meets_brief && brief && brief.tag && !tweetInput.value.toLowerCase().includes(brief.tag.toLowerCase())) {
-    const escapedTag = brief.tag.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    disclaimerHtml = `<p class="verdict-disclaimer">Disclaimer: this brief requires tagging <strong>${escapedTag}</strong>. Without it, the real validator may not pass your tweet.</p>`;
-  }
-
-  let html = `<div class="verdict ${verdictClass}"><div class="verdict-row"><span class="verdict-label">${verdictIcon}${verdictText}${countHtml}</span></div>${disclaimerHtml}</div>`;
+  let html = `<div class="verdict ${verdictClass}"><div class="verdict-row"><span class="verdict-label">${verdictIcon}${verdictText}</span></div></div>`;
   if (data.meets_brief) {
     html += `<button type="button" class="post-x-btn">Post to X</button>`;
-  }
-
-  if (!data.meets_brief) {
-    const failedCheck = data.checks.find(c => c.verdict === "NO") || data.checks[0];
-    html += `<p class="reason">${failedCheck.summary}</p>`;
-    // Only surface the pessimistic-scoring explanation when it's actually
-    // the confusing case: an earlier check passed before this one failed.
-    // A fail on the very first check needs no extra context.
-    if (data.checks.length > 1) {
-      html += `<p class="variance-note">An earlier check passed, but all 3 independent checks must pass. Stricter than the real validator, which only needs 1 of 3.</p>`;
-    }
+  } else if (data.reasons && data.reasons.length) {
+    // Reasons are the validators' own fixed sentences (see jev.py), not
+    // model-written text, but escape anyway -- cheap and keeps this safe if
+    // that ever changes.
+    const esc = t => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    html += `<ul class="reasons">${data.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>`;
   }
 
   resultDiv.innerHTML = html;
@@ -2893,12 +2724,12 @@ const MODE_INTRO_ENGAGEMENT = "Choose your campaign, enter your X handle, and se
 const MODE_INTRO_LOOKUP = "Enter the URL of any tweet, including ones outside active Stitch3 campaigns, to see its total score based on eligible retweets and quote tweets.";
 
 // Footer credit swaps to match whichever backend actually powers the open
-// tab -- Tweet Lookup doesn't call Chutes/an LLM at all (it's real X data
-// via Desearch, see tweet_lookup.py), so the usual Chutes credit would be
-// inaccurate there. Captured from the DOM (not hardcoded) so the real
-// Chutes markup/link/icon stays the single source of truth.
+// tab -- Tweet Lookup doesn't call JEV/an LLM at all (it's real X data
+// via Desearch, see tweet_lookup.py), so the usual OpenRouter credit would
+// be inaccurate there. Captured from the DOM (not hardcoded) so the markup
+// in the page stays the single source of truth.
 const poweredByEl = document.getElementById("powered-by-text");
-const POWERED_BY_CHUTES_HTML = poweredByEl.innerHTML;
+const POWERED_BY_CHECK_HTML = poweredByEl.innerHTML;
 const POWERED_BY_DESEARCH_HTML = 'Tweet data by <a href="https://desearch.ai" target="_blank" rel="noopener" class="powered-by-link"><span class="desearch-logo-icon" aria-hidden="true"></span>Desearch</a> for Bitcast-aligned engagement scoring.';
 // Each tab has its own path (main.py serves the same page for all of them).
 const MODE_PATHS = { check: "/", engagement: "/engagement-value", lookup: "/tweet-score" };
@@ -2926,7 +2757,7 @@ function showMode(mode) {
     modeIntro.textContent = MODE_INTRO_CHECK;
     modeIntro.style.display = "";
   }
-  poweredByEl.innerHTML = mode === "lookup" ? POWERED_BY_DESEARCH_HTML : POWERED_BY_CHUTES_HTML;
+  poweredByEl.innerHTML = mode === "lookup" ? POWERED_BY_DESEARCH_HTML : POWERED_BY_CHECK_HTML;
 }
 
 modeTabs.forEach(tab => {

@@ -12,15 +12,13 @@ This tool reduces that risk by providing immediate feedback before a tweet is pu
 
 This tool is built to replicate the actual validator's brief-evaluation logic as closely as possible, not just approximate it:
 
-- **Same model and provider.** Evaluation runs on `Qwen/Qwen3-32B` via [Chutes](https://chutes.ai) — the same model and provider the production validator uses, not a different LLM standing in for it.
-- **Same prompts.** All prompt versions the validator currently supports (v1, v2, v5, v6) are transcribed directly from its source, and the correct version is selected automatically per brief (via each brief's `prompt_version` field), the same way the real validator does.
-- **Deliberately stricter than the real validator's own multi-check strategy.** The real validator runs up to 3 independent evaluation checks per tweet and accepts it as compliant if *any* check passes. This tool runs the same 3 independent checks (including the same per-check text differentiator the validator uses internally, so each check is a genuinely independent judgment rather than 3 repeats of the same answer) but requires *all 3* to pass, stopping early at the first failure. This is an intentional deviation, not a fidelity gap: since a false "pass" here is far more costly to a creator than a false "fail" (they'd post believing it's compliant, only to have the real validator disagree), the tool is tuned to be a conservative predictor rather than an exact replica of the validator's own leniency.
-
-Because of that, a tweet can occasionally fail here even though the real validator, using its own more lenient any-1-of-3 rule, would have passed it — that trade-off is intentional. Results can also vary slightly between runs on borderline tweets, since each of the 3 checks is an independent LLM judgment — that's expected, not a bug.
+- **Same model and provider.** Evaluation runs on TypeSafe's JEV (`typesafe/jev-1.13`) through [OpenRouter](https://openrouter.ai) — the same model and endpoint the production validators use (bitcast-x 3.1.0), not a different LLM standing in for it.
+- **Same requests and thresholds.** The request text for every prompt version the validators support (v1, v2, v5, v6), the pass/fail thresholds, and the code-level check for required tags and links are copied directly from the validator's source, and the correct version is selected automatically per brief (via each brief's `prompt_version` field).
+- **Same verdict.** One JEV request per tweet, and the tweet passes only when every check passes — exactly the validators' rule. JEV is deterministic for a given request, so there is no run-to-run variance and no multi-check strategy to tune; the failure reasons shown are the validators' own plain-language sentences.
 
 **Engagement Value**
 
-The Engagement Value tab reproduces Bitcast's own public scoring formula so a creator can see, per campaign, what every other considered account's quote or retweet is actually worth to them. Pick an ecosystem (Bittensor / Perp DEXs / Prediction Markets) and a campaign, and the tool shows a ranked leaderboard of every account considered for that campaign's ecosystem snapshot. Enter your own X handle to get a personalized view: your influence, rank, and baseline score, plus a per-account quote/retweet value that accounts for prior-interaction history between you and each account (a higher "Ties" score between two accounts slightly discounts the value, discouraging accounts that already engage each other from inflating each other's numbers). This tool doesn't call an LLM at all — it's a direct, deterministic calculation against Bitcast's public campaign and ecosystem-map data, so no `CHUTES_API_KEY` is needed to use it.
+The Engagement Value tab reproduces Bitcast's own public scoring formula so a creator can see, per campaign, what every other considered account's quote or retweet is actually worth to them. Pick an ecosystem (Bittensor / Perp DEXs / Prediction Markets) and a campaign, and the tool shows a ranked leaderboard of every account considered for that campaign's ecosystem snapshot. Enter your own X handle to get a personalized view: your influence, rank, and baseline score, plus a per-account quote/retweet value that accounts for prior-interaction history between you and each account (a higher "Ties" score between two accounts slightly discounts the value, discouraging accounts that already engage each other from inflating each other's numbers). This tool doesn't call an LLM at all — it's a direct, deterministic calculation against Bitcast's public campaign and ecosystem-map data, so no LLM key is needed to use it.
 
 **Getting Started**
 
@@ -41,15 +39,15 @@ The Engagement Value tab reproduces Bitcast's own public scoring formula so a cr
    pip install -r requirements.txt
    ```
 
-3. **Configure your Chutes API key.**
+3. **Configure your OpenRouter API key.**
 
-   Evaluation runs on [Chutes](https://chutes.ai) (`Qwen/Qwen3-32B`) — the same model and provider the real Bitcast validator uses. Copy the example env file and fill in your key:
+   Evaluation runs on JEV via [OpenRouter](https://openrouter.ai) — the same model and endpoint the real Bitcast validators use. Copy the example env file and fill in your key:
 
    ```bash
    cp .env.example .env
    ```
 
-   Then open `.env` and set `CHUTES_API_KEY` to a real key from your [Chutes account](https://chutes.ai).
+   Then open `.env` and set `OPENROUTER_API_KEY` to a real key from your [OpenRouter account](https://openrouter.ai).
 
 4. **Start the FastAPI backend.**
 
